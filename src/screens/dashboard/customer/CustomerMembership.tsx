@@ -249,9 +249,9 @@ export default function CustomerMembership() {
   const pricePeriod = billingCycle === "monthly" ? "/ month" : "/ year";
 
   return (
-    <div className="relative flex flex-col gap-10 pb-16 text-[#F5F5F5] animate-in fade-in slide-in-from-bottom-3 duration-500 fill-mode-forwards">
+    <div className="flex flex-col gap-10 pb-16 text-[#F5F5F5] animate-in fade-in slide-in-from-bottom-3 duration-500 fill-mode-forwards">
       {/* ─── UNIQUE DARK GEOMETRIC BACKGROUND PATTERN ─── */}
-      <div className="absolute inset-0 pointer-events-none -z-10 overflow-hidden">
+      <div className="fixed inset-0 pointer-events-none -z-10 overflow-hidden" style={{ top: 64, left: 240 }}>
         {/* Deep background color layer */}
         <div className="absolute inset-0 bg-[#101010]" />
 
@@ -405,7 +405,7 @@ export default function CustomerMembership() {
                 </span>
               </h2>
               <p className="text-[#A1A1AA] text-sm sm:text-base mt-4 leading-relaxed max-w-xl">
-                Join the WashWizzy Membership for the ultimate convenience. Members receive complimentary house calls, priority booking slots, flexible 1-hour rescheduling, and 20% savings on every detail.
+                Join the WashWizzy Membership for the ultimate convenience. Members receive complimentary house calls, priority booking slots, and flexible 1-hour rescheduling.
               </p>
             </div>
 
@@ -478,7 +478,7 @@ export default function CustomerMembership() {
       </div>
 
       {/* ─── COMPARISON SECTION: FREE TIER VS MEMBERSHIP (BEST VALUE) ─── */}
-      <div id="comparison-section" className="flex flex-col gap-6 scroll-mt-24">
+      <div id="comparison-section" className="flex flex-col gap-6 scroll-mt-20">
         <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
           <div>
             <span className="text-xs font-bold uppercase tracking-wider text-[#E86A33]">

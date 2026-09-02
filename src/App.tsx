@@ -29,7 +29,11 @@ import CustomerMembership from './screens/dashboard/customer/CustomerMembership'
 import CustomerRewards from './screens/dashboard/customer/CustomerRewards';
 import CustomerReviews from './screens/dashboard/customer/CustomerReviews';
 import CustomerNotifications from './screens/dashboard/customer/CustomerNotifications';
+import StaffDashboardLayout from './screens/dashboard/staff/StaffDashboardLayout';
 import StaffDashboard from './screens/dashboard/staff/StaffDashboard';
+import StaffAppointments from './screens/dashboard/staff/StaffAppointments';
+import StaffReviews from './screens/dashboard/staff/StaffReviews';
+import StaffProfile from './screens/dashboard/staff/StaffProfile';
 import AdminDashboard from './screens/dashboard/admin/AdminDashboard';
 import { AuthProvider } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
@@ -78,7 +82,16 @@ export default function App() {
               <Route path="reviews" element={<CustomerReviews />} />
               <Route path="notifications" element={<CustomerNotifications />} />
             </Route>
-            <Route path="/dashboard/staff" element={<StaffDashboard />} />
+            <Route path="/dashboard/staff" element={
+              <NotificationsProvider>
+                <StaffDashboardLayout />
+              </NotificationsProvider>
+            }>
+              <Route index element={<StaffDashboard />} />
+              <Route path="appointments" element={<StaffAppointments />} />
+              <Route path="reviews" element={<StaffReviews />} />
+              <Route path="profile" element={<StaffProfile />} />
+            </Route>
             <Route path="/dashboard/admin" element={<AdminDashboard />} />
           </Routes>
         </BrowserRouter>
