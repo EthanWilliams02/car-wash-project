@@ -1,4 +1,13 @@
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import {
+  doc,
+  setDoc,
+  serverTimestamp,
+  collection,
+  collectionGroup,
+  query,
+  where,
+  getDocs,
+} from 'firebase/firestore';
 import { db } from './firebase';
 
 export interface StoredAppointment {
@@ -15,6 +24,7 @@ export interface StoredAppointment {
   status: string;
   statusColor: string;
   staffName: string;
+  assignedStaffUid?: string;
   staffStatus: string;
   isLocked: boolean;
   cancellationPolicy?: string;
@@ -371,6 +381,134 @@ export async function cancelAppointment(id: string, reason: string, uid?: string
     }
   } catch (e) {
     console.error('Failed to cancel appointment', e);
+  }
+}
+
+export async function markAppointmentCompleted(customerUid: string, appointmentId: string): Promise<void> {
+  try {
+    const apptRef = doc(db, 'users', customerUid, 'appointments', appointmentId);
+    await setDoc(apptRef, {
+      completed: true,
+      status: 'Completed',
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+
+    // Update localStorage cache if it exists for this user
+    const current = getStoredAppointments(customerUid);
+    if (current.length > 0) {
+      const updated = current.map((appt) =>
+        appt.id === appointmentId ? { ...appt, completed: true, status: 'Completed' } : appt
+      );
+      localStorage.setItem(getAppointmentsStorageKey(customerUid), JSON.stringify(updated));
+    }
+  } catch (e) {
+    console.error('Failed to mark appointment completed in Firestore:', e);
+    throw e;
+  }
+}
+
+export async function assignStaffToAppointment(
+  customerUid: string,
+  appointmentId: string,
+  staffUid: string,
+  staffName: string
+): Promise<void> {
+  try {
+    const apptRef = doc(db, 'users', customerUid, 'appointments', appointmentId);
+    await setDoc(apptRef, {
+      assignedStaffUid: staffUid,
+      staffName: staffName,
+      staffStatus: 'Assigned',
+      status: 'Confirmed',
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+
+    // Update localStorage cache if it exists for this user
+    const current = getStoredAppointments(customerUid);
+    if (current.length > 0) {
+      const updated = current.map((appt) =>
+        appt.id === appointmentId
+          ? {
+              ...appt,
+              assignedStaffUid: staffUid,
+              staffName: staffName,
+              staffStatus: 'Assigned',
+              status: 'Confirmed',
+            }
+          : appt
+      );
+      localStorage.setItem(getAppointmentsStorageKey(customerUid), JSON.stringify(updated));
+    }
+  } catch (e) {
+    console.error('Failed to assign staff to appointment in Firestore:', e);
+    throw e;
+  }
+}
+
+export async function getAllStaffMembers(): Promise<{ uid: string; name: string }[]> {
+  try {
+    const usersRef = collection(db, 'users');
+    const q = query(usersRef, where('role', '==', 'staff'));
+    const snapshot = await getDocs(q);
+    const staffList: { uid: string; name: string }[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      const name = data.displayName || data.name || data.fullName || data.email || 'Staff Member';
+      staffList.push({
+        uid: docSnap.id,
+        name,
+      });
+    });
+    return staffList;
+  } catch (e) {
+    console.error('Failed to fetch staff members:', e);
+    return [];
+  }
+}
+
+export async function getTodaysAppointmentsAcrossAllCustomers(): Promise<(StoredAppointment & { customerUid: string })[]> {
+  try {
+    const q = query(collectionGroup(db, 'appointments'));
+    const snapshot = await getDocs(q);
+    const results: (StoredAppointment & { customerUid: string })[] = [];
+    const now = new Date();
+
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data() as StoredAppointment;
+      const customerUid = docSnap.ref.parent.parent?.id || '';
+
+      const dateStr = data.date;
+      const timeStr = data.time;
+      let isToday = false;
+
+      if (dateStr) {
+        const lower = dateStr.toLowerCase().trim();
+        if (lower.startsWith('today')) {
+          isToday = true;
+        } else {
+          const parsed = parseAppointmentDateTime(dateStr, timeStr);
+          if (parsed) {
+            isToday =
+              parsed.getFullYear() === now.getFullYear() &&
+              parsed.getMonth() === now.getMonth() &&
+              parsed.getDate() === now.getDate();
+          }
+        }
+      }
+
+      if (isToday) {
+        results.push({
+          ...data,
+          id: docSnap.id,
+          customerUid,
+        });
+      }
+    });
+
+    return results;
+  } catch (e) {
+    console.error('Failed to get today\'s appointments across all customers:', e);
+    return [];
   }
 }
 
