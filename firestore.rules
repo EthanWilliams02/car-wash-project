@@ -33,7 +33,13 @@ service cloud.firestore {
       allow write: if false; 
     }
 
-    // 5. Default fallback to lock down anything else not explicitly allowed above
+    // 5. Rule for settings
+    match /settings/{document=**} {
+      allow read: if true; // Allowed so staff can read access codes during signup
+      allow write: if false;
+    }
+
+    // 6. Default fallback to lock down anything else not explicitly allowed above
     match /{document=**} {
       allow read, write: if false;
     }
