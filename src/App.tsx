@@ -34,6 +34,7 @@ import StaffDashboard from './screens/dashboard/staff/StaffDashboard';
 import StaffAppointments from './screens/dashboard/staff/StaffAppointments';
 import StaffReviews from './screens/dashboard/staff/StaffReviews';
 import StaffProfile from './screens/dashboard/staff/StaffProfile';
+import AdminDashboardLayout from './screens/dashboard/admin/AdminDashboardLayout';
 import AdminDashboard from './screens/dashboard/admin/AdminDashboard';
 import { AuthProvider } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
@@ -92,7 +93,9 @@ export default function App() {
               <Route path="reviews" element={<StaffReviews />} />
               <Route path="profile" element={<StaffProfile />} />
             </Route>
-            <Route path="/dashboard/admin" element={<AdminDashboard />} />
+            <Route path="/dashboard/admin" element={<AdminDashboardLayout />}>
+              <Route index element={<AdminDashboard />} />
+            </Route>
           </Routes>
           </BrowserRouter>
         </ToastProvider>
