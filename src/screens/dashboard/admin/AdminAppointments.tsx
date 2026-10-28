@@ -15,11 +15,14 @@ import {
   AlertCircle,
   RefreshCw,
   Sparkles,
+  UserCheck,
+  UserPlus,
 } from 'lucide-react';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useToast } from '../../../contexts/ToastContext';
 import {
   subscribeToAllAppointments,
+  subscribeToStaffMembers,
   confirmAppointmentByOwner,
   getDynamicAppointmentStatus,
   type StoredAppointment,
@@ -49,7 +52,25 @@ export default function AdminAppointments() {
   // Confirmation action in-progress tracker: appointmentId -> boolean
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
+  // Staff members populated from real Firestore staff accounts
+  const [staffList, setStaffList] = useState<{ uid: string; name: string; email?: string }[]>([]);
+  // Selected staff member per appointment: appointmentId -> staffUid
+  const [selectedStaffMap, setSelectedStaffMap] = useState<Record<string, string>>({});
+
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Subscribe to real-time staff members list
+  useEffect(() => {
+    const unsubStaff = subscribeToStaffMembers(
+      (list) => {
+        setStaffList(list);
+      },
+      (err) => {
+        console.warn('Failed to load real staff members:', err);
+      }
+    );
+    return () => unsubStaff();
+  }, []);
 
   // Subscribe to real-time appointments across all customers
   useEffect(() => {
@@ -176,19 +197,45 @@ export default function AdminAppointments() {
     };
   }, [appointments]);
 
-  // Handle owner confirmation action
-  const handleConfirm = async (appt: StoredAppointment & { customerUid: string }) => {
+  // Handle owner staff assignment & confirmation action
+  const handleAssignAndConfirm = async (appt: StoredAppointment & { customerUid: string }) => {
     if (!currentUser) return;
+
+    const selectedStaffUid = selectedStaffMap[appt.id];
+    if (!selectedStaffUid) {
+      showToast('Please select a staff member to assign to this booking before confirming.', 'error');
+      return;
+    }
+
+    const staffMember = staffList.find((s) => s.uid === selectedStaffUid);
+    if (!staffMember) {
+      showToast('The selected staff member could not be found. Please select an active staff member.', 'error');
+      return;
+    }
+
+    if (confirmingId === appt.id) return; // Prevent duplicate submissions
+
     setConfirmingId(appt.id);
 
     try {
-      await confirmAppointmentByOwner(appt.customerUid, appt.id, {
-        uid: currentUser.uid,
-        name: currentUser.displayName || 'Owner',
-      });
-      showToast(`Appointment #${appt.id} confirmed successfully. Customer has been notified.`, 'success');
+      await confirmAppointmentByOwner(
+        appt.customerUid,
+        appt.id,
+        {
+          uid: staffMember.uid,
+          name: staffMember.name,
+        },
+        {
+          uid: currentUser.uid,
+          name: currentUser.displayName || 'Owner',
+        }
+      );
+      showToast(
+        `Appointment #${appt.id} confirmed and assigned to ${staffMember.name}. Both customer and staff have been notified.`,
+        'success'
+      );
     } catch (err: any) {
-      console.error('Failed to confirm appointment:', err);
+      console.error('Failed to confirm and assign appointment:', err);
       showToast(err?.message || 'Failed to confirm appointment. Please try again.', 'error');
     } finally {
       setConfirmingId(null);
@@ -628,27 +675,72 @@ export default function AdminAppointments() {
 
                 {/* Row 3: Action Buttons */}
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-[#2C2C2C]">
-                  <div className="text-xs text-[#71717A]">
+                  <div className="text-xs text-[#71717A] flex items-center gap-2 flex-wrap">
+                    {appt.confirmed && appt.staffName && (
+                      <span className="inline-flex items-center gap-1.5 text-xs text-[#35B86B] font-medium bg-[#35B86B]/10 px-2.5 py-1 rounded-lg border border-[#35B86B]/20">
+                        <UserCheck className="w-3.5 h-3.5 text-[#35B86B]" />
+                        Assigned to: <strong className="text-[#F5F5F5]">{appt.staffName}</strong>
+                      </span>
+                    )}
                     {appt.confirmedByName && appt.confirmed && (
-                      <span>Confirmed by {appt.confirmedByName}</span>
+                      <span className="text-[#71717A]">
+                        (Confirmed by {appt.confirmedByName})
+                      </span>
                     )}
                     {isCompleted && (
                       <span className="text-[#35B86B]">Wash service completed</span>
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2.5 ml-auto">
-                    {/* Confirm Action for Awaiting Confirmation */}
+                  <div className="flex flex-wrap items-center gap-2.5 ml-auto">
+                    {/* Staff Selector and Assign & Confirm Action for Awaiting Confirmation */}
                     {isAwaiting && !isCancelled && !isCompleted && (
-                      <Button
-                        variant="primary"
-                        isLoading={isSaving}
-                        onClick={() => handleConfirm(appt)}
-                        className="!py-2 !px-3.5 !text-xs gap-1.5 font-semibold shadow-sm"
-                      >
-                        <CheckCircle2 className="w-4 h-4" />
-                        Confirm Booking
-                      </Button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="relative">
+                          <select
+                            value={selectedStaffMap[appt.id] || ''}
+                            onChange={(e) =>
+                              setSelectedStaffMap((prev) => ({
+                                ...prev,
+                                [appt.id]: e.target.value,
+                              }))
+                            }
+                            disabled={isSaving}
+                            aria-label="Assign staff member"
+                            className="bg-[#101010] border border-[#2C2C2C] text-[#F5F5F5] text-xs rounded-xl pl-3 pr-8 py-2 focus:outline-none focus:border-[#E86A33] focus:ring-1 focus:ring-[#E86A33] transition-all cursor-pointer disabled:opacity-50 appearance-none font-medium max-w-[210px] truncate"
+                          >
+                            <option value="">
+                              {staffList.length === 0
+                                ? 'No registered staff found'
+                                : 'Select Staff Member... *'}
+                            </option>
+                            {staffList.map((staff) => (
+                              <option key={staff.uid} value={staff.uid}>
+                                {staff.name} {staff.email ? `(${staff.email})` : ''}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-[#71717A]">
+                            <UserPlus className="w-3.5 h-3.5 text-[#E86A33]" />
+                          </div>
+                        </div>
+
+                        <Button
+                          variant="primary"
+                          isLoading={isSaving}
+                          disabled={!selectedStaffMap[appt.id] || isSaving}
+                          onClick={() => handleAssignAndConfirm(appt)}
+                          className="!py-2 !px-3.5 !text-xs gap-1.5 font-semibold shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                          title={
+                            !selectedStaffMap[appt.id]
+                              ? 'Select a staff member before confirming'
+                              : 'Assign staff member and confirm booking'
+                          }
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          Assign & Confirm
+                        </Button>
+                      </div>
                     )}
 
                     {/* Reschedule Action (Available for awaiting or confirmed, protected for terminal) */}
