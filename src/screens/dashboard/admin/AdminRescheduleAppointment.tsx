@@ -311,7 +311,9 @@ export default function AdminRescheduleAppointment() {
               <span>{newTime || 'Choose time'}</span>
             </div>
             <span className="text-[11px] text-[#A1A1AA] mt-1">
-              Will be saved as Confirmed with owner reschedule tag
+              {appointment?.confirmed && appointment?.assignedStaffUid
+                ? 'Will remain Confirmed with owner reschedule tag'
+                : 'Will remain Awaiting Confirmation until staff member is assigned'}
             </span>
           </div>
         </div>
@@ -420,7 +422,9 @@ export default function AdminRescheduleAppointment() {
             className="gap-2 font-semibold shadow-md shadow-[#E86A33]/10"
           >
             <CheckCircle2 className="w-4 h-4" />
-            Save & Confirm New Schedule
+            {appointment?.confirmed && appointment?.assignedStaffUid
+              ? 'Save & Confirm New Schedule'
+              : 'Save Rescheduled Time'}
           </Button>
         </div>
       </form>

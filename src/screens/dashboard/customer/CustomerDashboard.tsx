@@ -12,6 +12,7 @@ import {
   ArrowRight,
   CalendarDays,
   Crown,
+  UserCheck,
 } from 'lucide-react';
 import { useAuth } from '../../../contexts/AuthContext';
 import { db } from '../../../lib/firebase';
@@ -301,6 +302,12 @@ export default function CustomerDashboard() {
                   <Car className="w-3.5 h-3.5 text-[#E86A33]" />
                   <span>{nextAppointment.vehicle}</span>
                 </div>
+                {nextAppointment.confirmed && nextAppointment.staffName && nextAppointment.staffName !== 'Pending Assignment' && (
+                  <div className="flex items-center gap-1.5 text-xs text-[#35B86B] mt-1 font-medium">
+                    <UserCheck className="w-3.5 h-3.5 text-[#35B86B]" />
+                    <span>Assigned: <strong className="text-[#F5F5F5]">{nextAppointment.staffName}</strong></span>
+                  </div>
+                )}
               </div>
 
               <div className="flex flex-col gap-1">

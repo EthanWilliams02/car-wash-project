@@ -307,7 +307,39 @@ export function getDynamicAppointmentStatus(
     }
   }
 
-  // 5. Explicit "Awaiting Confirmation"
+  // 5. Confirmed booking check (Explicit Confirmed takes priority over date-based or refund labels)
+  if (confirmed === true || (initialStatus === 'Confirmed' && confirmed !== false)) {
+    // Check if staff has explicitly updated their route status
+    if (
+      staffStatus === 'On Route' ||
+      initialStatus === 'Staff on route' ||
+      (staffStatus && staffStatus.toLowerCase().includes('on route'))
+    ) {
+      return {
+        status: 'Staff on route',
+        statusColor: 'blue',
+        isLocked: true,
+        isMissed: false,
+        canReschedule: false,
+        isRefundEligible: false,
+        cancellationPolicy: 'Staff is currently on route. Bookings are locked.',
+        refundStatusText: 'Non-refundable while on route',
+      };
+    }
+
+    return {
+      status: 'Confirmed',
+      statusColor: 'burnt-orange',
+      isLocked: !canReschedule,
+      isMissed: false,
+      canReschedule,
+      isRefundEligible,
+      cancellationPolicy,
+      refundStatusText,
+    };
+  }
+
+  // 6. Explicit "Awaiting Confirmation"
   if (confirmed === false || initialStatus === 'Awaiting Confirmation') {
     return {
       status: 'Awaiting Confirmation',
@@ -321,8 +353,7 @@ export function getDynamicAppointmentStatus(
     };
   }
 
-  // 6. Explicit "Staff on route" only if staffStatus or initialStatus specifically indicates it
-  // Do NOT infer from date alone!
+  // 7. Explicit "Staff on route"
   if (
     staffStatus === 'On Route' ||
     initialStatus === 'Staff on route' ||
@@ -340,7 +371,7 @@ export function getDynamicAppointmentStatus(
     };
   }
 
-  // 7. Confirmed booking
+  // 8. Default fallback: Confirmed
   return {
     status: 'Confirmed',
     statusColor: 'burnt-orange',
@@ -524,25 +555,59 @@ export async function assignStaffToAppointment(
   }
 }
 
-export async function getAllStaffMembers(): Promise<{ uid: string; name: string }[]> {
+export async function getAllStaffMembers(): Promise<{ uid: string; name: string; email?: string }[]> {
   try {
     const usersRef = collection(db, 'users');
     const q = query(usersRef, where('role', '==', 'staff'));
     const snapshot = await getDocs(q);
-    const staffList: { uid: string; name: string }[] = [];
+    const staffList: { uid: string; name: string; email?: string }[] = [];
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
-      const name = data.displayName || data.name || data.fullName || data.email || 'Staff Member';
+      const name = data.displayName || data.fullName || data.name || data.email || 'Staff Member';
       staffList.push({
         uid: docSnap.id,
         name,
+        email: data.email,
       });
     });
+    staffList.sort((a, b) => a.name.localeCompare(b.name));
     return staffList;
   } catch (e) {
     console.error('Failed to fetch staff members:', e);
     return [];
   }
+}
+
+/**
+ * Subscribes to real-time updates for all registered staff members in Firestore.
+ */
+export function subscribeToStaffMembers(
+  callback: (staff: { uid: string; name: string; email?: string }[]) => void,
+  onError?: (err: any) => void
+): () => void {
+  const usersRef = collection(db, 'users');
+  const q = query(usersRef, where('role', '==', 'staff'));
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const staffList: { uid: string; name: string; email?: string }[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const name = data.displayName || data.fullName || data.name || data.email || 'Staff Member';
+        staffList.push({
+          uid: docSnap.id,
+          name,
+          email: data.email,
+        });
+      });
+      staffList.sort((a, b) => a.name.localeCompare(b.name));
+      callback(staffList);
+    },
+    (err) => {
+      console.warn('Failed to listen to staff members in Firestore:', err);
+      if (onError) onError(err);
+    }
+  );
 }
 
 export async function getTodaysAppointmentsAcrossAllCustomers(): Promise<(StoredAppointment & { customerUid: string })[]> {
@@ -651,15 +716,25 @@ export async function sendCustomerNotification(
 }
 
 /**
- * Confirm an appointment (Owner action).
- * Immediately updates Firestore, records who confirmed it and when,
- * sets confirmed: true and status: 'Confirmed', and creates a persistent customer notification.
+ * Assign a staff member and confirm an appointment (Owner action).
+ * Requires that a real staff member is selected.
+ * Atomically updates assignedStaffUid, staffName, staffStatus: 'Assigned',
+ * confirmed: true, and status: 'Confirmed' in one write to Firestore.
+ * Notifies the customer and the assigned staff member.
  */
 export async function confirmAppointmentByOwner(
   customerUid: string,
   appointmentId: string,
+  staff: { uid: string; name: string },
   adminUser: { uid: string; name?: string }
 ): Promise<void> {
+  if (!staff || !staff.uid || !staff.name?.trim()) {
+    throw new Error('A staff member must be selected before confirming the booking.');
+  }
+  if (!customerUid || !appointmentId) {
+    throw new Error('Missing required customer or appointment identifier.');
+  }
+
   const apptRef = doc(db, 'users', customerUid, 'appointments', appointmentId);
   const snap = await getDoc(apptRef);
 
@@ -678,10 +753,15 @@ export async function confirmAppointmentByOwner(
   const confirmedAt = Date.now();
   const confirmedBy = adminUser.uid;
   const confirmedByName = adminUser.name || 'Owner';
+  const assignedStaffName = staff.name.trim();
 
+  // Atomic update to existing appointment document
   await setDoc(
     apptRef,
     {
+      assignedStaffUid: staff.uid,
+      staffName: assignedStaffName,
+      staffStatus: 'Assigned',
       confirmed: true,
       status: 'Confirmed',
       statusColor: 'burnt-orange',
@@ -694,11 +774,37 @@ export async function confirmAppointmentByOwner(
     { merge: true }
   );
 
-  // Send persistent notification to the customer
+  // Update local cache safely for immediate client responsiveness
+  try {
+    const current = getStoredAppointments(customerUid);
+    if (current.length > 0) {
+      const updated = current.map((appt) =>
+        appt.id === appointmentId
+          ? {
+              ...appt,
+              assignedStaffUid: staff.uid,
+              staffName: assignedStaffName,
+              staffStatus: 'Assigned',
+              confirmed: true,
+              status: 'Confirmed',
+              statusColor: 'burnt-orange',
+              confirmedAt,
+              confirmedBy,
+              confirmedByName,
+            }
+          : appt
+      );
+      localStorage.setItem(getAppointmentsStorageKey(customerUid), JSON.stringify(updated));
+    }
+  } catch (e) {
+    console.warn('Failed to update local cache in confirmAppointmentByOwner:', e);
+  }
+
+  // 1. Send persistent notification to the customer
   try {
     await sendCustomerNotification(customerUid, {
       title: 'Appointment Confirmed',
-      message: `Your booking for ${currentData.packageName || 'Wash Service'} on ${currentData.date} at ${currentData.time} has been confirmed by the owner.`,
+      message: `Your booking for ${currentData.packageName || 'Wash Service'} on ${currentData.date} at ${currentData.time} has been confirmed. Staff member ${assignedStaffName} has been assigned to your service.`,
       category: 'appointments',
       icon: 'calendar',
       link: '/dashboard/customer/appointments',
@@ -706,6 +812,20 @@ export async function confirmAppointmentByOwner(
     });
   } catch (err) {
     console.warn('Failed to send customer confirmation notification:', err);
+  }
+
+  // 2. Send persistent notification to the assigned staff member
+  try {
+    await sendCustomerNotification(staff.uid, {
+      title: 'New Service Job Assigned',
+      message: `You have been assigned to an appointment for ${currentData.customerName || 'a customer'} (${currentData.packageName || 'Wash Service'}) scheduled for ${currentData.date} at ${currentData.time}.`,
+      category: 'appointments',
+      icon: 'calendar',
+      link: '/dashboard/staff/appointments',
+      eventId: `staff-job-${appointmentId}`,
+    });
+  } catch (err) {
+    console.warn('Failed to send staff assignment notification:', err);
   }
 }
 
@@ -822,14 +942,17 @@ export async function adminRescheduleAppointment(
   const rescheduledBy = adminUser.uid;
   const rescheduledByName = adminUser.name || 'Owner';
 
+  // Only keep confirmed status if staff is already assigned and was previously confirmed
+  const wasConfirmed = currentData.confirmed === true && Boolean(currentData.assignedStaffUid);
+
   await setDoc(
     apptRef,
     {
       date: newDate,
       time: newTime,
-      confirmed: true,
-      status: 'Confirmed',
-      statusColor: 'burnt-orange',
+      confirmed: wasConfirmed,
+      status: wasConfirmed ? 'Confirmed' : 'Awaiting Confirmation',
+      statusColor: wasConfirmed ? 'burnt-orange' : 'amber',
       previousSchedule: {
         date: oldDate,
         time: oldTime,
@@ -857,6 +980,22 @@ export async function adminRescheduleAppointment(
     });
   } catch (err) {
     console.warn('Failed to send customer reschedule notification:', err);
+  }
+
+  // Also notify assigned staff member if one was assigned
+  if (currentData.assignedStaffUid) {
+    try {
+      await sendCustomerNotification(currentData.assignedStaffUid, {
+        title: 'Assigned Service Job Rescheduled',
+        message: `Your assigned job for ${currentData.customerName || 'a customer'} (${currentData.packageName || 'Wash Service'}) has been rescheduled to ${newDate} at ${newTime}. Reason: "${reason.trim()}".`,
+        category: 'appointments',
+        icon: 'clock',
+        link: '/dashboard/staff/appointments',
+        eventId: `staff-resched-${appointmentId}-${newDate}-${newTime.replace(/\s+/g, '')}`,
+      });
+    } catch (err) {
+      console.warn('Failed to send staff reschedule notification:', err);
+    }
   }
 }
 

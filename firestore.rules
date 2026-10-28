@@ -27,37 +27,50 @@ service cloud.firestore {
       // Users can read their own profile; admins can read all profiles to view customer contact info
       allow read: if isOwner(userId) || isAdmin();
       
-      // Customers cannot set role to admin on signup
-      allow create: if (isOwner(userId) && (!('role' in request.resource.data) || request.resource.data.role == 'customer')) || isAdmin();
+      // Customers cannot set role to admin on signup; staff can activate their account
+      allow create: if (isOwner(userId) && (!('role' in request.resource.data) || request.resource.data.role in ['customer', 'staff'])) || isAdmin();
       
       // Users cannot elevate their own role to admin; admins can update profiles
       allow update: if (isOwner(userId) && (!('role' in request.resource.data) || request.resource.data.role == resource.data.role)) || isAdmin();
       allow delete: if isAdmin();
 
       // Specific rule for appointments:
-      // Customers cannot confirm their own bookings or alter terminal (cancelled/completed) bookings
+      // Customers cannot confirm their own bookings, cannot assign staff, and cannot alter terminal (cancelled/completed) bookings
+      // Assigned staff can only access jobs assigned to them
       match /appointments/{appointmentId} {
-        allow read: if isOwner(userId) || isAdmin();
+        allow read: if isOwner(userId) || isAdmin() || (isAuthenticated() && resource.data.assignedStaffUid == request.auth.uid);
         
-        // Creation must start unconfirmed
+        // Creation must start unconfirmed with no staff assigned
         allow create: if (isOwner(userId) && 
                          (!('confirmed' in request.resource.data) || request.resource.data.confirmed == false) &&
+                         (!('assignedStaffUid' in request.resource.data) || request.resource.data.assignedStaffUid == null) &&
                          (!('status' in request.resource.data) || request.resource.data.status == 'Awaiting Confirmation'))
                       || isAdmin();
         
-        // Customer updates cannot self-confirm or overwrite cancelled/completed appointments
-        allow update: if isAdmin() || (
-          isOwner(userId) &&
-          (!('confirmed' in request.resource.data) || request.resource.data.confirmed == resource.data.confirmed) &&
+        // Customer updates cannot self-confirm, cannot assign staff, and cannot overwrite cancelled/completed appointments
+        // Admin updates cannot modify cancelled or completed appointments
+        // Assigned staff can update job status (e.g. mark completed)
+        allow update: if (
+          isAdmin() &&
           resource.data.status != 'Cancelled' &&
           (!('completed' in resource.data) || resource.data.completed != true)
+        ) || (
+          isOwner(userId) &&
+          (!('confirmed' in request.resource.data) || request.resource.data.confirmed == resource.data.confirmed) &&
+          (!('assignedStaffUid' in request.resource.data) || request.resource.data.assignedStaffUid == resource.data.assignedStaffUid) &&
+          (!('staffName' in request.resource.data) || request.resource.data.staffName == resource.data.staffName) &&
+          resource.data.status != 'Cancelled' &&
+          (!('completed' in resource.data) || resource.data.completed != true)
+        ) || (
+          isAuthenticated() && resource.data.assignedStaffUid == request.auth.uid &&
+          resource.data.status != 'Cancelled'
         );
         
         allow delete: if isAdmin();
       }
 
       // Specific rule for notifications:
-      // Admins need write access to create appointment update notifications for customers
+      // Admins need write access to create appointment update notifications for customers and staff
       match /notifications/{notificationId} {
         allow read: if isOwner(userId) || isAdmin();
         allow create, update: if isOwner(userId) || isAdmin();
@@ -75,7 +88,8 @@ service cloud.firestore {
       allow read: if isAdmin() || 
                      (isAuthenticated() && resource.data.assignedStaffUid == request.auth.uid) || 
                      (isAuthenticated() && resource.data.customerUid == request.auth.uid);
-      allow write: if isAdmin();
+      allow write: if (isAdmin() && resource.data.status != 'Cancelled' && (!('completed' in resource.data) || resource.data.completed != true)) ||
+                      (isAuthenticated() && resource.data.assignedStaffUid == request.auth.uid && resource.data.status != 'Cancelled');
     }
 
     // 6. Rule for staff registration 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   collectionGroup,
   query,
@@ -11,6 +11,7 @@ import {
   Info,
   Check,
   X,
+  CalendarDays,
 } from 'lucide-react';
 import { Button } from '../../../components/ui/Button';
 import { useAuth } from '../../../contexts/AuthContext';
@@ -40,6 +41,7 @@ export default function StaffAppointments() {
   const { currentUser } = useAuth();
   const [appointments, setAppointments] = useState<StaffAppointmentItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'today' | 'upcoming' | 'all'>('today');
 
   // Info modal state
   const [infoModalAppt, setInfoModalAppt] = useState<StaffAppointmentItem | null>(null);
@@ -141,10 +143,25 @@ export default function StaffAppointments() {
     return () => unsubscribe();
   }, [currentUser?.uid]);
 
-  // Client-side filter: only today's appointments
-  const todayAppointments = appointments.filter((appt) =>
-    isAppointmentToday(appt.date, appt.time)
+  // Client-side segmented lists
+  const todayAppointments = useMemo(
+    () => appointments.filter((appt) => isAppointmentToday(appt.date, appt.time)),
+    [appointments]
   );
+
+  const upcomingAppointments = useMemo(
+    () =>
+      appointments.filter(
+        (appt) => !isAppointmentToday(appt.date, appt.time) && !appt.completed
+      ),
+    [appointments]
+  );
+
+  const displayedAppointments = useMemo(() => {
+    if (activeTab === 'today') return todayAppointments;
+    if (activeTab === 'upcoming') return upcomingAppointments;
+    return appointments;
+  }, [activeTab, todayAppointments, upcomingAppointments, appointments]);
 
   const handleMarkCompleted = async (appt: StaffAppointmentItem) => {
     const nextCompleted = !appt.completed;
@@ -165,42 +182,93 @@ export default function StaffAppointments() {
   };
 
   return (
-    <div className="flex flex-col gap-6 text-[#F5F5F5] font-sans">
-      {/* Section 1 — "Today's Schedule" header row */}
-      <div className="flex items-center gap-3">
-        <Calendar className="w-6 h-6 text-[#E86A33]" />
-        <h2 className="text-2xl font-bold font-display tracking-tight text-[#F5F5F5]">
-          Today's Schedule
-        </h2>
+    <div className="flex flex-col gap-6 text-[#F5F5F5] font-sans pb-12">
+      {/* Header row */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <Calendar className="w-6 h-6 text-[#E86A33]" />
+          <div>
+            <h2 className="text-2xl font-bold font-display tracking-tight text-[#F5F5F5]">
+              My Assigned Jobs
+            </h2>
+            <p className="text-xs text-[#A1A1AA] mt-0.5">
+              Review and manage bookings assigned to you by the owner
+            </p>
+          </div>
+        </div>
+
+        {/* Tab Pills */}
+        <div className="flex items-center gap-1.5 bg-[#171717] p-1.5 rounded-xl border border-[#2C2C2C] self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={() => setActiveTab('today')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+              activeTab === 'today'
+                ? 'bg-[#E86A33] text-white shadow-sm'
+                : 'text-[#A1A1AA] hover:text-[#F5F5F5]'
+            }`}
+          >
+            Today ({todayAppointments.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('upcoming')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+              activeTab === 'upcoming'
+                ? 'bg-[#E86A33] text-white shadow-sm'
+                : 'text-[#A1A1AA] hover:text-[#F5F5F5]'
+            }`}
+          >
+            Upcoming ({upcomingAppointments.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('all')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+              activeTab === 'all'
+                ? 'bg-[#E86A33] text-white shadow-sm'
+                : 'text-[#A1A1AA] hover:text-[#F5F5F5]'
+            }`}
+          >
+            All Assigned ({appointments.length})
+          </button>
+        </div>
       </div>
 
-      {/* Section 2 — Full-width Confirmed Appointments list */}
+      {/* Confirmed Appointments list */}
       <div className="w-full flex flex-col gap-4">
         {/* Header row */}
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold text-[#F5F5F5]">
-            Confirmed Appointments
+            {activeTab === 'today'
+              ? "Today's Schedule"
+              : activeTab === 'upcoming'
+              ? 'Upcoming Scheduled Bookings'
+              : 'All Assigned Bookings'}
           </h3>
           <span className="text-sm text-[#71717A]">
-            {todayAppointments.length} {todayAppointments.length === 1 ? 'Booking' : 'Bookings'} Today
+            {displayedAppointments.length}{' '}
+            {displayedAppointments.length === 1 ? 'Booking' : 'Bookings'}
           </span>
         </div>
 
         {/* Cards List */}
         {isLoading ? (
           <div className="bg-[#171717] border border-[#2C2C2C] rounded-xl p-8 text-center text-[#A1A1AA]">
-            Loading today's schedule...
+            Loading schedule...
           </div>
-        ) : todayAppointments.length > 0 ? (
+        ) : displayedAppointments.length > 0 ? (
           <div className="flex flex-col gap-4">
-            {todayAppointments.map((appt) => {
+            {displayedAppointments.map((appt) => {
               const timeDisplay = formatTimeDisplay(appt.time);
+              const isToday = isAppointmentToday(appt.date, appt.time);
+
               return (
                 <div
                   key={appt.id}
                   className="bg-[#171717] border border-[#2C2C2C] rounded-xl p-5 shadow-sm hover:border-[#E86A33]/40 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-4"
                 >
-                  {/* Left cluster: Time + Customer Info + Vehicle/Staff */}
+                  {/* Left cluster: Time + Scheduled Date + Customer Info + Vehicle */}
                   <div className="flex flex-col sm:flex-row sm:items-center gap-4 flex-1 min-w-0">
                     {/* Time: Bold, stacked AM/PM */}
                     <div className="flex flex-col items-center justify-center min-w-[60px] sm:min-w-[68px] shrink-0 text-center sm:border-r sm:border-[#2C2C2C] sm:pr-4">
@@ -214,12 +282,12 @@ export default function StaffAppointments() {
                       )}
                     </div>
 
-                    {/* Customer name + service badge */}
-                    <div className="flex flex-col gap-1.5 min-w-[130px] shrink-0">
+                    {/* Customer name + service badge + scheduled date */}
+                    <div className="flex flex-col gap-1.5 min-w-[150px] shrink-0">
                       <span className="font-semibold text-base text-[#F5F5F5] truncate">
                         {appt.customerName}
                       </span>
-                      <div>
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span
                           className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${getBadgeStyles(
                             appt.badgeColor
@@ -227,6 +295,16 @@ export default function StaffAppointments() {
                         >
                           {appt.serviceName}
                         </span>
+                        {isToday ? (
+                          <span className="text-[11px] font-semibold text-[#35B86B] bg-[#35B86B]/10 px-2 py-0.5 rounded-md border border-[#35B86B]/20">
+                            Today
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#A1A1AA] bg-[#101010] px-2 py-0.5 rounded-md border border-[#2C2C2C]">
+                            <CalendarDays className="w-3 h-3 text-[#E86A33]" />
+                            {appt.date}
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -234,8 +312,6 @@ export default function StaffAppointments() {
                     <div className="flex items-center gap-2 text-[#A1A1AA] text-sm flex-1 min-w-0">
                       <Car className="w-4 h-4 shrink-0 text-[#E86A33]" />
                       <span className="truncate text-[#F5F5F5]">{appt.vehicle}</span>
-                      <span className="text-[#71717A] shrink-0">•</span>
-                      <span className="truncate">{appt.staffName}</span>
                     </div>
                   </div>
 
@@ -264,7 +340,7 @@ export default function StaffAppointments() {
                     <button
                       type="button"
                       onClick={() => setInfoModalAppt(appt)}
-                      className="p-2 text-[#71717A] hover:text-[#E86A33] transition-colors rounded-lg hover:bg-[#1F1F1F]"
+                      className="p-2 text-[#71717A] hover:text-[#E86A33] transition-colors rounded-lg hover:bg-[#1F1F1F] cursor-pointer"
                       title="View Appointment Details"
                       aria-label="View Appointment Details"
                     >
@@ -277,7 +353,11 @@ export default function StaffAppointments() {
           </div>
         ) : (
           <div className="bg-[#171717] border border-[#2C2C2C] rounded-xl p-8 text-center text-[#A1A1AA]">
-            No appointments scheduled for today
+            {activeTab === 'today'
+              ? 'No appointments scheduled for today'
+              : activeTab === 'upcoming'
+              ? 'No upcoming appointments scheduled'
+              : 'No appointments currently assigned to you'}
           </div>
         )}
       </div>

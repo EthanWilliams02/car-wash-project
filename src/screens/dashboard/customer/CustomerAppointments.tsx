@@ -5,7 +5,7 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { db } from '../../../lib/firebase';
 import { getStoredAppointments, getDynamicAppointmentStatus, getAppointmentsStorageKey, type StoredAppointment } from '../../../lib/appointments';
 import { Button } from '../../../components/ui/Button';
-import { Lock, Calendar, Clock, MapPin, User, ChevronRight } from 'lucide-react';
+import { Lock, Calendar, Clock, MapPin, User, UserCheck, ChevronRight } from 'lucide-react';
 
 const DEFAULT_MOCK_APPOINTMENTS: StoredAppointment[] = [
   {
@@ -474,10 +474,29 @@ function AppointmentCard({
           <div className="flex flex-col gap-1">
             <span className="text-sm font-medium text-[#F5F5F5]">{packageName}</span>
             <div className="flex items-center gap-2">
-              <div className="w-5 h-5 rounded-full bg-[#1F1F1F] flex items-center justify-center overflow-hidden border border-[#2C2C2C]">
-                <User className="w-3 h-3 text-[#E86A33]" />
+              <div className={`w-5 h-5 rounded-full flex items-center justify-center overflow-hidden border ${
+                confirmed
+                  ? 'bg-[#35B86B]/15 border-[#35B86B]/30'
+                  : 'bg-[#1F1F1F] border-[#2C2C2C]'
+              }`}>
+                {confirmed ? (
+                  <UserCheck className="w-3 h-3 text-[#35B86B]" />
+                ) : (
+                  <User className="w-3 h-3 text-[#E86A33]" />
+                )}
               </div>
-              <span className="text-xs text-[#A1A1AA]">{staffName} • {computedStaffStatus}</span>
+              <span className="text-xs">
+                {confirmed ? (
+                  <span className="text-[#A1A1AA]">
+                    Assigned Staff: <strong className="text-[#F5F5F5] font-semibold">{staffName}</strong>
+                    {computedStaffStatus && <span className="text-[#71717A]"> ({computedStaffStatus})</span>}
+                  </span>
+                ) : (
+                  <span className="text-[#A1A1AA]">
+                    {staffName || 'Pending Assignment'} • {computedStaffStatus || 'Finding Staff...'}
+                  </span>
+                )}
+              </span>
             </div>
           </div>
           <button className="text-[#71717A] hover:text-[#E86A33] transition-colors">
