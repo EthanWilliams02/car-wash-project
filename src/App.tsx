@@ -38,6 +38,8 @@ import AdminDashboardLayout from './screens/dashboard/admin/AdminDashboardLayout
 import AdminDashboard from './screens/dashboard/admin/AdminDashboard';
 import AdminServiceManagement from './screens/dashboard/admin/AdminServiceManagement';
 import AdminAppointments from './screens/dashboard/admin/AdminAppointments';
+import AdminCancelAppointment from './screens/dashboard/admin/AdminCancelAppointment';
+import AdminRescheduleAppointment from './screens/dashboard/admin/AdminRescheduleAppointment';
 import AdminBusinessAnalytics from './screens/dashboard/admin/AdminBusinessAnalytics';
 import AdminReviews from './screens/dashboard/admin/AdminReviews';
 import { AuthProvider } from './contexts/AuthContext';
@@ -75,7 +77,9 @@ export default function App() {
               <Route path="profile" element={<CustomerProfile />} />
               <Route path="appointments" element={<CustomerAppointments />} />
               <Route path="appointments/reschedule" element={<CustomerReschedule />} />
+              <Route path="appointments/reschedule/:appointmentId" element={<CustomerReschedule />} />
               <Route path="appointments/cancel" element={<CustomerCancel />} />
+              <Route path="appointments/cancel/:appointmentId" element={<CustomerCancel />} />
               <Route path="packages" element={<CustomerPackages />} />
               <Route path="booking" element={<CustomerBooking />} />
               <Route path="custom-package" element={<CustomerCustomPackage />} />
@@ -101,6 +105,8 @@ export default function App() {
               <Route index element={<AdminDashboard />} />
               <Route path="service-management" element={<AdminServiceManagement />} />
               <Route path="appointments" element={<AdminAppointments />} />
+              <Route path="appointments/cancel/:customerUid/:appointmentId" element={<AdminCancelAppointment />} />
+              <Route path="appointments/reschedule/:customerUid/:appointmentId" element={<AdminRescheduleAppointment />} />
               <Route path="business-analytics" element={<AdminBusinessAnalytics />} />
               <Route path="reviews" element={<AdminReviews />} />
             </Route>

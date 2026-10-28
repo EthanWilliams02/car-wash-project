@@ -1,5 +1,6 @@
 import {
   doc,
+  getDoc,
   setDoc,
   serverTimestamp,
   collection,
@@ -7,6 +8,7 @@ import {
   query,
   where,
   getDocs,
+  onSnapshot,
 } from 'firebase/firestore';
 import { db } from './firebase';
 
@@ -29,9 +31,32 @@ export interface StoredAppointment {
   isLocked: boolean;
   cancellationPolicy?: string;
   cancelReason?: string;
+  cancelledAt?: number;
+  cancelledBy?: string;
+  cancelledByName?: string;
+  cancelledByRole?: string;
   createdAt: number;
   completed?: boolean;
   confirmed?: boolean;
+  confirmedAt?: number;
+  confirmedBy?: string;
+  confirmedByName?: string;
+  confirmedByRole?: string;
+  rescheduledByOwner?: boolean;
+  rescheduledAt?: number;
+  rescheduledBy?: string;
+  rescheduledByName?: string;
+  rescheduledByRole?: string;
+  rescheduleReason?: string;
+  previousSchedule?: {
+    date: string;
+    time: string;
+  };
+  customerUid?: string;
+  customerName?: string;
+  customerEmail?: string;
+  customerPhone?: string;
+  updatedAt?: any;
 }
 
 export const CALL_OUT_FEE = 150;
@@ -58,24 +83,29 @@ export function getStoredAppointments(uid?: string | null): StoredAppointment[] 
   }
 }
 
-export function saveAppointment(appointment: StoredAppointment, uid?: string | null): void {
+export async function saveAppointment(appointment: StoredAppointment, uid?: string | null): Promise<void> {
+  // If user is authenticated, Firestore is the authoritative source.
+  if (uid) {
+    const apptRef = doc(db, 'users', uid, 'appointments', appointment.id);
+    await setDoc(
+      apptRef,
+      {
+        ...appointment,
+        customerUid: uid,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
+
+  // Update local cache safely
   try {
     const current = getStoredAppointments(uid);
     const updated = [appointment, ...current.filter((a) => a.id !== appointment.id)];
     const key = getAppointmentsStorageKey(uid);
     localStorage.setItem(key, JSON.stringify(updated));
-
-    if (uid) {
-      const apptRef = doc(db, 'users', uid, 'appointments', appointment.id);
-      setDoc(apptRef, {
-        ...appointment,
-        updatedAt: serverTimestamp(),
-      }, { merge: true }).catch((err) => {
-        console.error('Failed to sync appointment to Firestore:', err);
-      });
-    }
   } catch (e) {
-    console.error('Failed to save appointment to localStorage', e);
+    console.warn('Failed to update appointments cache in localStorage', e);
   }
 }
 
@@ -86,6 +116,8 @@ export interface DynamicStatusResult {
   isMissed: boolean;
   canReschedule: boolean;
   cancellationPolicy: string;
+  isRefundEligible: boolean;
+  refundStatusText?: string;
 }
 
 export function isRescheduleEligible(
@@ -173,6 +205,12 @@ export function parseAppointmentDateTime(dateStr?: string, timeStr?: string): Da
   return target;
 }
 
+/**
+ * Calculates the dynamic status and refund eligibility for an appointment.
+ * NOTE: Explicit statuses (Cancelled, Awaiting Confirmation, Confirmed, Completed)
+ * are NEVER overwritten by date-based calculations like "Refund Eligible" or "Staff on route".
+ * Refund eligibility is returned as a separate property.
+ */
 export function getDynamicAppointmentStatus(
   dateStr?: string,
   timeStr?: string,
@@ -180,8 +218,10 @@ export function getDynamicAppointmentStatus(
   completed?: boolean,
   hasMembership: boolean = false,
   initialStatus?: string,
-  confirmed?: boolean
+  confirmed?: boolean,
+  staffStatus?: string
 ): DynamicStatusResult {
+  // 1. Explicit cancellation check
   if (initialStatus === 'Cancelled') {
     return {
       status: 'Cancelled',
@@ -189,96 +229,59 @@ export function getDynamicAppointmentStatus(
       isLocked: true,
       isMissed: false,
       canReschedule: false,
+      isRefundEligible: false,
       cancellationPolicy: 'This appointment was cancelled.',
+      refundStatusText: 'Non-refundable (cancelled)',
     };
   }
 
-  const canReschedule = isRescheduleEligible(dateStr, timeStr, hasMembership, initialIsMissed, completed);
-
-  if (confirmed === false) {
-    return {
-      status: 'Awaiting Confirmation',
-      statusColor: 'amber',
-      isLocked: false,
-      isMissed: false,
-      canReschedule,
-      cancellationPolicy: 'This booking is awaiting confirmation from our team.',
-    };
-  }
-
-  if (completed) {
+  // 2. Explicit completion check
+  if (completed === true || initialStatus === 'Completed') {
     return {
       status: 'Completed',
       statusColor: 'reward-green',
       isLocked: true,
       isMissed: false,
       canReschedule: false,
+      isRefundEligible: false,
       cancellationPolicy: 'This appointment has been completed.',
-    };
-  }
-
-  if (initialIsMissed) {
-    return {
-      status: 'Missed',
-      statusColor: 'red',
-      isLocked: true,
-      isMissed: true,
-      canReschedule: false,
-      cancellationPolicy: 'You missed this appointment. Refund requests are subject to approval.',
+      refundStatusText: 'Completed',
     };
   }
 
   const target = parseAppointmentDateTime(dateStr, timeStr);
   const now = new Date();
 
-  if (!target) {
-    return {
-      status: 'Refund Eligible',
-      statusColor: 'reward-green',
-      isLocked: false,
-      isMissed: false,
-      canReschedule,
-      cancellationPolicy: 'Cancel before appointment for a full refund.',
-    };
+  // 3. Past check (Missed)
+  let isPast = Boolean(initialIsMissed);
+  if (!isPast && target) {
+    isPast = target.getTime() < now.getTime();
   }
 
-  const isSameDay =
-    target.getFullYear() === now.getFullYear() &&
-    target.getMonth() === now.getMonth() &&
-    target.getDate() === now.getDate();
-
-  const isPastDay =
-    new Date(target.getFullYear(), target.getMonth(), target.getDate()).getTime() <
-    new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-
-  if (isPastDay) {
+  if (isPast) {
     return {
       status: 'Missed',
       statusColor: 'red',
       isLocked: true,
       isMissed: true,
       canReschedule: false,
+      isRefundEligible: false,
       cancellationPolicy: 'You missed this appointment. Refund requests are subject to approval.',
+      refundStatusText: 'Subject to approval',
     };
   }
 
-  // Same calendar day: Staff on route
-  if (isSameDay) {
-    return {
-      status: 'Staff on route',
-      statusColor: 'blue',
-      isLocked: true,
-      isMissed: false,
-      canReschedule,
-      cancellationPolicy: 'Appointment is today. Staff is on route and bookings are locked.',
-    };
-  }
+  const canReschedule = isRescheduleEligible(dateStr, timeStr, hasMembership, initialIsMissed, completed);
 
-  const diffMs = target.getTime() - now.getTime();
-  const diffHours = diffMs / (1000 * 60 * 60);
+  // 4. Calculate refund eligibility separately from appointment status
+  let isRefundEligible = false;
+  let cancellationPolicy = 'Cancellation policies apply.';
+  let refundStatusText = '20% fee applies within 24 hours';
 
-  // Within 24 hours but not the same day: Scheduled with warning
-  if (diffHours <= 24 && diffHours > 0) {
+  if (target) {
+    const diffMs = target.getTime() - now.getTime();
+    const diffHours = diffMs / (1000 * 60 * 60);
+
     const cutoff = new Date(target.getTime() - 24 * 60 * 60 * 1000);
     const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const cutoffMonth = monthNames[cutoff.getMonth()];
@@ -289,67 +292,150 @@ export function getDynamicAppointmentStatus(
     cutoffHours = cutoffHours % 12 || 12;
     const cutoffStr = `${cutoffMonth} ${cutoffDay}, ${cutoffHours}:${cutoffMins} ${cutoffMeridiem}`;
 
+    if (diffHours > 24) {
+      isRefundEligible = true;
+      cancellationPolicy = `Cancel before ${cutoffStr} for a full refund.`;
+      refundStatusText = 'Full refund eligible';
+    } else if (diffHours > 0) {
+      isRefundEligible = true;
+      cancellationPolicy = `Cancel before ${cutoffStr} for a full refund. 20% fee applies thereafter.`;
+      refundStatusText = 'Partial refund (20% fee)';
+    } else {
+      isRefundEligible = false;
+      cancellationPolicy = 'Appointment time has passed.';
+      refundStatusText = 'Non-refundable';
+    }
+  }
+
+  // 5. Explicit "Awaiting Confirmation"
+  if (confirmed === false || initialStatus === 'Awaiting Confirmation') {
     return {
-      status: 'Scheduled',
-      statusColor: 'burnt-orange',
+      status: 'Awaiting Confirmation',
+      statusColor: 'amber',
       isLocked: false,
       isMissed: false,
       canReschedule,
-      cancellationPolicy: `Cancel before ${cutoffStr} for a full refund. 20% fee applies thereafter.`,
+      isRefundEligible,
+      cancellationPolicy: 'This booking is awaiting confirmation from our team.',
+      refundStatusText,
     };
   }
 
-  // More than 24 hours away: Refund Eligible (full refund available)
-  const cutoff = new Date(target.getTime() - 24 * 60 * 60 * 1000);
-  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const cutoffMonth = monthNames[cutoff.getMonth()];
-  const cutoffDay = cutoff.getDate();
-  let cutoffHours = cutoff.getHours();
-  const cutoffMins = cutoff.getMinutes().toString().padStart(2, '0');
-  const cutoffMeridiem = cutoffHours >= 12 ? 'PM' : 'AM';
-  cutoffHours = cutoffHours % 12 || 12;
-  const cutoffStr = `${cutoffMonth} ${cutoffDay}, ${cutoffHours}:${cutoffMins} ${cutoffMeridiem}`;
+  // 6. Explicit "Staff on route" only if staffStatus or initialStatus specifically indicates it
+  // Do NOT infer from date alone!
+  if (
+    staffStatus === 'On Route' ||
+    initialStatus === 'Staff on route' ||
+    (staffStatus && staffStatus.toLowerCase().includes('on route'))
+  ) {
+    return {
+      status: 'Staff on route',
+      statusColor: 'blue',
+      isLocked: true,
+      isMissed: false,
+      canReschedule: false,
+      isRefundEligible: false,
+      cancellationPolicy: 'Staff is currently on route. Bookings are locked.',
+      refundStatusText: 'Non-refundable while on route',
+    };
+  }
 
+  // 7. Confirmed booking
   return {
-    status: 'Refund Eligible',
-    statusColor: 'reward-green',
-    isLocked: false,
+    status: 'Confirmed',
+    statusColor: 'burnt-orange',
+    isLocked: !canReschedule,
     isMissed: false,
     canReschedule,
-    cancellationPolicy: `Cancel before ${cutoffStr} for a full refund.`,
+    isRefundEligible,
+    cancellationPolicy,
+    refundStatusText,
   };
 }
 
-export function updateAppointment(id: string, updates: Partial<StoredAppointment>, uid?: string | null): void {
+export async function updateAppointment(
+  id: string,
+  updates: Partial<StoredAppointment>,
+  uid?: string | null
+): Promise<void> {
+  if (uid) {
+    const apptRef = doc(db, 'users', uid, 'appointments', id);
+    const existingSnap = await getDoc(apptRef);
+    if (existingSnap.exists()) {
+      const currentData = existingSnap.data() as StoredAppointment;
+      if (currentData.status === 'Cancelled' && updates.status !== 'Cancelled') {
+        throw new Error('Cannot update an appointment that has already been cancelled.');
+      }
+      if (currentData.completed && updates.completed === false) {
+        throw new Error('Cannot modify an appointment that has already been completed.');
+      }
+    }
+
+    await setDoc(
+      apptRef,
+      {
+        ...updates,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
+
+  // Update local cache
   try {
     const current = getStoredAppointments(uid);
     const exists = current.some((appt) => appt.id === id);
     let updated: StoredAppointment[];
     if (exists) {
-      updated = current.map((appt) =>
-        appt.id === id ? { ...appt, ...updates } : appt
-      );
+      updated = current.map((appt) => (appt.id === id ? { ...appt, ...updates } : appt));
     } else {
       updated = [{ id, ...updates } as StoredAppointment, ...current];
     }
     const key = getAppointmentsStorageKey(uid);
     localStorage.setItem(key, JSON.stringify(updated));
-
-    if (uid) {
-      const apptRef = doc(db, 'users', uid, 'appointments', id);
-      setDoc(apptRef, {
-        ...updates,
-        updatedAt: serverTimestamp(),
-      }, { merge: true }).catch((err) => {
-        console.error('Failed to sync appointment update to Firestore:', err);
-      });
-    }
   } catch (e) {
-    console.error('Failed to update appointment in localStorage', e);
+    console.warn('Failed to update appointment cache in localStorage', e);
   }
 }
 
-export async function cancelAppointment(id: string, reason: string, uid?: string | null): Promise<void> {
+export async function cancelAppointment(
+  id: string,
+  reason: string,
+  uid?: string | null,
+  actingUser?: { uid: string; name?: string; role?: string }
+): Promise<void> {
+  if (uid) {
+    const apptRef = doc(db, 'users', uid, 'appointments', id);
+    const snap = await getDoc(apptRef);
+    if (snap.exists()) {
+      const data = snap.data() as StoredAppointment;
+      if (data.status === 'Cancelled') {
+        throw new Error('This appointment has already been cancelled.');
+      }
+      if (data.completed) {
+        throw new Error('Cannot cancel an appointment that has already been completed.');
+      }
+    }
+
+    await setDoc(
+      apptRef,
+      {
+        status: 'Cancelled',
+        statusColor: 'red',
+        isLocked: true,
+        cancelReason: reason,
+        cancellationPolicy: `Appointment cancelled: "${reason}".`,
+        cancelledAt: Date.now(),
+        cancelledBy: actingUser?.uid || uid,
+        cancelledByName: actingUser?.name || 'Customer',
+        cancelledByRole: actingUser?.role || 'customer',
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
+
+  // Update local cache
   try {
     const current = getStoredAppointments(uid);
     const updated = current.map((appt) => {
@@ -361,49 +447,40 @@ export async function cancelAppointment(id: string, reason: string, uid?: string
           isLocked: true,
           cancelReason: reason,
           cancellationPolicy: `Appointment cancelled: "${reason}".`,
+          cancelledAt: Date.now(),
         };
       }
       return appt;
     });
     const key = getAppointmentsStorageKey(uid);
     localStorage.setItem(key, JSON.stringify(updated));
-
-    if (uid) {
-      const apptRef = doc(db, 'users', uid, 'appointments', id);
-      await setDoc(apptRef, {
-        status: 'Cancelled',
-        statusColor: 'red',
-        isLocked: true,
-        cancelReason: reason,
-        cancellationPolicy: `Appointment cancelled: "${reason}".`,
-        updatedAt: serverTimestamp(),
-      }, { merge: true });
-    }
   } catch (e) {
-    console.error('Failed to cancel appointment', e);
+    console.warn('Failed to cancel appointment in localStorage', e);
   }
 }
 
 export async function markAppointmentCompleted(customerUid: string, appointmentId: string): Promise<void> {
-  try {
-    const apptRef = doc(db, 'users', customerUid, 'appointments', appointmentId);
-    await setDoc(apptRef, {
+  const apptRef = doc(db, 'users', customerUid, 'appointments', appointmentId);
+  await setDoc(
+    apptRef,
+    {
       completed: true,
       status: 'Completed',
+      statusColor: 'reward-green',
+      isLocked: true,
       updatedAt: serverTimestamp(),
-    }, { merge: true });
+    },
+    { merge: true }
+  );
 
-    // Update localStorage cache if it exists for this user
-    const current = getStoredAppointments(customerUid);
-    if (current.length > 0) {
-      const updated = current.map((appt) =>
-        appt.id === appointmentId ? { ...appt, completed: true, status: 'Completed' } : appt
-      );
-      localStorage.setItem(getAppointmentsStorageKey(customerUid), JSON.stringify(updated));
-    }
-  } catch (e) {
-    console.error('Failed to mark appointment completed in Firestore:', e);
-    throw e;
+  const current = getStoredAppointments(customerUid);
+  if (current.length > 0) {
+    const updated = current.map((appt) =>
+      appt.id === appointmentId
+        ? { ...appt, completed: true, status: 'Completed', statusColor: 'reward-green', isLocked: true }
+        : appt
+    );
+    localStorage.setItem(getAppointmentsStorageKey(customerUid), JSON.stringify(updated));
   }
 }
 
@@ -413,35 +490,37 @@ export async function assignStaffToAppointment(
   staffUid: string,
   staffName: string
 ): Promise<void> {
-  try {
-    const apptRef = doc(db, 'users', customerUid, 'appointments', appointmentId);
-    await setDoc(apptRef, {
+  const apptRef = doc(db, 'users', customerUid, 'appointments', appointmentId);
+  await setDoc(
+    apptRef,
+    {
       assignedStaffUid: staffUid,
       staffName: staffName,
       staffStatus: 'Assigned',
       status: 'Confirmed',
+      statusColor: 'burnt-orange',
+      confirmed: true,
       updatedAt: serverTimestamp(),
-    }, { merge: true });
+    },
+    { merge: true }
+  );
 
-    // Update localStorage cache if it exists for this user
-    const current = getStoredAppointments(customerUid);
-    if (current.length > 0) {
-      const updated = current.map((appt) =>
-        appt.id === appointmentId
-          ? {
-              ...appt,
-              assignedStaffUid: staffUid,
-              staffName: staffName,
-              staffStatus: 'Assigned',
-              status: 'Confirmed',
-            }
-          : appt
-      );
-      localStorage.setItem(getAppointmentsStorageKey(customerUid), JSON.stringify(updated));
-    }
-  } catch (e) {
-    console.error('Failed to assign staff to appointment in Firestore:', e);
-    throw e;
+  const current = getStoredAppointments(customerUid);
+  if (current.length > 0) {
+    const updated = current.map((appt) =>
+      appt.id === appointmentId
+        ? {
+            ...appt,
+            assignedStaffUid: staffUid,
+            staffName: staffName,
+            staffStatus: 'Assigned',
+            status: 'Confirmed',
+            statusColor: 'burnt-orange',
+            confirmed: true,
+          }
+        : appt
+    );
+    localStorage.setItem(getAppointmentsStorageKey(customerUid), JSON.stringify(updated));
   }
 }
 
@@ -507,10 +586,354 @@ export async function getTodaysAppointmentsAcrossAllCustomers(): Promise<(Stored
 
     return results;
   } catch (e) {
-    console.error('Failed to get today\'s appointments across all customers:', e);
+    console.error("Failed to get today's appointments across all customers:", e);
     return [];
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin-Specific Appointment Actions & Customer Notifications
+// ─────────────────────────────────────────────────────────────────────────────
 
+export interface SendCustomerNotificationInput {
+  title: string;
+  message: string;
+  category?: 'appointments' | 'rewards' | 'promotions' | 'system' | 'reviews' | 'membership';
+  icon?: 'calendar' | 'clock' | 'star' | 'crown' | 'gift' | 'check';
+  iconColor?: string;
+  iconBg?: string;
+  link?: string;
+  eventId?: string;
+  metadata?: Record<string, any>;
+}
 
+/**
+ * Sends a persistent in-app notification directly to the customer's notifications subcollection.
+ * Avoids duplicate notifications on retries by using deterministic document IDs based on eventId.
+ */
+export async function sendCustomerNotification(
+  customerUid: string,
+  input: SendCustomerNotificationInput
+): Promise<void> {
+  if (!customerUid) {
+    console.warn('Cannot send notification: customerUid is missing');
+    return;
+  }
+
+  const { title, message, category = 'appointments', icon = 'calendar', link, eventId, metadata } = input;
+  const createdAt = Date.now();
+
+  const iconColor = input.iconColor || (icon === 'calendar' || icon === 'clock' ? 'text-[#E86A33]' : 'text-[#35B86B]');
+  const iconBg = input.iconBg || (icon === 'calendar' || icon === 'clock' ? 'bg-[#E86A33]/10' : 'bg-[#35B86B]/10');
+
+  // Use eventId as document id when present to make repeated writes strictly idempotent
+  const notifId = eventId || `notif-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const notifDocRef = doc(db, 'users', customerUid, 'notifications', notifId);
+
+  const notifData = {
+    id: notifId,
+    userId: customerUid,
+    category,
+    icon,
+    iconColor,
+    iconBg,
+    title,
+    message,
+    time: 'Just now',
+    isRead: false,
+    createdAt,
+    eventId: eventId || notifId,
+    link: link || '/dashboard/customer/appointments',
+    metadata: metadata || {},
+  };
+
+  await setDoc(notifDocRef, notifData, { merge: true });
+}
+
+/**
+ * Confirm an appointment (Owner action).
+ * Immediately updates Firestore, records who confirmed it and when,
+ * sets confirmed: true and status: 'Confirmed', and creates a persistent customer notification.
+ */
+export async function confirmAppointmentByOwner(
+  customerUid: string,
+  appointmentId: string,
+  adminUser: { uid: string; name?: string }
+): Promise<void> {
+  const apptRef = doc(db, 'users', customerUid, 'appointments', appointmentId);
+  const snap = await getDoc(apptRef);
+
+  if (!snap.exists()) {
+    throw new Error('Appointment not found.');
+  }
+
+  const currentData = snap.data() as StoredAppointment;
+  if (currentData.status === 'Cancelled') {
+    throw new Error('Cannot confirm a cancelled appointment.');
+  }
+  if (currentData.completed) {
+    throw new Error('Cannot confirm an already completed appointment.');
+  }
+
+  const confirmedAt = Date.now();
+  const confirmedBy = adminUser.uid;
+  const confirmedByName = adminUser.name || 'Owner';
+
+  await setDoc(
+    apptRef,
+    {
+      confirmed: true,
+      status: 'Confirmed',
+      statusColor: 'burnt-orange',
+      confirmedAt,
+      confirmedBy,
+      confirmedByName,
+      confirmedByRole: 'admin',
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  // Send persistent notification to the customer
+  try {
+    await sendCustomerNotification(customerUid, {
+      title: 'Appointment Confirmed',
+      message: `Your booking for ${currentData.packageName || 'Wash Service'} on ${currentData.date} at ${currentData.time} has been confirmed by the owner.`,
+      category: 'appointments',
+      icon: 'calendar',
+      link: '/dashboard/customer/appointments',
+      eventId: `appt-confirm-${appointmentId}`,
+    });
+  } catch (err) {
+    console.warn('Failed to send customer confirmation notification:', err);
+  }
+}
+
+/**
+ * Cancel an appointment (Owner action).
+ * Marks the appointment as cancelled in Firestore, records cancellation reason, acting admin,
+ * and sends an in-app notification to the customer.
+ */
+export async function adminCancelAppointment(
+  customerUid: string,
+  appointmentId: string,
+  reason: string,
+  adminUser: { uid: string; name?: string }
+): Promise<void> {
+  if (!reason.trim()) {
+    throw new Error('A cancellation reason is required.');
+  }
+
+  const apptRef = doc(db, 'users', customerUid, 'appointments', appointmentId);
+  const snap = await getDoc(apptRef);
+
+  if (!snap.exists()) {
+    throw new Error('Appointment not found.');
+  }
+
+  const currentData = snap.data() as StoredAppointment;
+  if (currentData.status === 'Cancelled') {
+    throw new Error('This appointment has already been cancelled.');
+  }
+  if (currentData.completed) {
+    throw new Error('Cannot cancel an appointment that has already been completed.');
+  }
+
+  const cancelledAt = Date.now();
+  const cancelledBy = adminUser.uid;
+  const cancelledByName = adminUser.name || 'Owner';
+
+  await setDoc(
+    apptRef,
+    {
+      status: 'Cancelled',
+      statusColor: 'red',
+      isLocked: true,
+      cancelReason: reason.trim(),
+      cancellationPolicy: `Appointment cancelled by owner: "${reason.trim()}".`,
+      cancelledAt,
+      cancelledBy,
+      cancelledByName,
+      cancelledByRole: 'admin',
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  // Send in-app notification containing the reason to the customer
+  try {
+    await sendCustomerNotification(customerUid, {
+      title: 'Appointment Cancelled by Owner',
+      message: `Your appointment for ${currentData.packageName || 'Wash Service'} on ${currentData.date} was cancelled by the owner. Reason: "${reason.trim()}".`,
+      category: 'appointments',
+      icon: 'calendar',
+      link: '/dashboard/customer/appointments',
+      eventId: `appt-cancel-${appointmentId}`,
+    });
+  } catch (err) {
+    console.warn('Failed to send customer cancellation notification:', err);
+  }
+}
+
+/**
+ * Reschedule an appointment (Owner action).
+ * Treats an owner-approved reschedule as confirmed, updates schedule,
+ * records previous schedule, reason, and acting admin, and notifies the customer.
+ */
+export async function adminRescheduleAppointment(
+  customerUid: string,
+  appointmentId: string,
+  newDate: string,
+  newTime: string,
+  reason: string,
+  adminUser: { uid: string; name?: string }
+): Promise<void> {
+  if (!newDate.trim() || !newTime.trim()) {
+    throw new Error('Both new date and time are required.');
+  }
+  if (!reason.trim()) {
+    throw new Error('A reason for rescheduling is required.');
+  }
+
+  const apptRef = doc(db, 'users', customerUid, 'appointments', appointmentId);
+  const snap = await getDoc(apptRef);
+
+  if (!snap.exists()) {
+    throw new Error('Appointment not found.');
+  }
+
+  const currentData = snap.data() as StoredAppointment;
+  if (currentData.status === 'Cancelled') {
+    throw new Error('Cannot reschedule an appointment that has been cancelled.');
+  }
+  if (currentData.completed) {
+    throw new Error('Cannot reschedule an appointment that has already been completed.');
+  }
+
+  // Reject past dates
+  const newTarget = parseAppointmentDateTime(newDate, newTime);
+  if (newTarget && newTarget.getTime() < Date.now()) {
+    throw new Error('The new date and time cannot be in the past.');
+  }
+
+  const oldDate = currentData.date;
+  const oldTime = currentData.time;
+  const rescheduledAt = Date.now();
+  const rescheduledBy = adminUser.uid;
+  const rescheduledByName = adminUser.name || 'Owner';
+
+  await setDoc(
+    apptRef,
+    {
+      date: newDate,
+      time: newTime,
+      confirmed: true,
+      status: 'Confirmed',
+      statusColor: 'burnt-orange',
+      previousSchedule: {
+        date: oldDate,
+        time: oldTime,
+      },
+      rescheduledByOwner: true,
+      rescheduleReason: reason.trim(),
+      rescheduledAt,
+      rescheduledBy,
+      rescheduledByName,
+      rescheduledByRole: 'admin',
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  // Notify customer with old and new schedule details
+  try {
+    await sendCustomerNotification(customerUid, {
+      title: 'Appointment Rescheduled by Owner',
+      message: `Your appointment for ${currentData.packageName || 'Wash Service'} originally scheduled for ${oldDate} at ${oldTime} has been rescheduled by the owner to ${newDate} at ${newTime}. Reason: "${reason.trim()}".`,
+      category: 'appointments',
+      icon: 'clock',
+      link: '/dashboard/customer/appointments',
+      eventId: `appt-resched-${appointmentId}-${newDate}-${newTime.replace(/\s+/g, '')}`,
+    });
+  } catch (err) {
+    console.warn('Failed to send customer reschedule notification:', err);
+  }
+}
+
+/**
+ * Subscribes to real-time updates for all appointments across all customers via collectionGroup.
+ * Fetches user profile names/emails where missing so owner views always have full customer information.
+ */
+export function subscribeToAllAppointments(
+  callback: (appointments: (StoredAppointment & { customerUid: string })[]) => void,
+  onError?: (err: any) => void
+): () => void {
+  const q = query(collectionGroup(db, 'appointments'));
+
+  const userCache: Record<string, { fullName?: string; email?: string; phoneNumber?: string }> = {};
+
+  const unsubscribe = onSnapshot(
+    q,
+    async (snapshot) => {
+      const list: (StoredAppointment & { customerUid: string })[] = [];
+      const missingUids = new Set<string>();
+
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as StoredAppointment;
+        const customerUid = data.customerUid || docSnap.ref.parent.parent?.id || '';
+
+        list.push({
+          ...data,
+          id: docSnap.id,
+          customerUid,
+        });
+
+        if (customerUid && !userCache[customerUid] && (!data.customerName || !data.customerEmail)) {
+          missingUids.add(customerUid);
+        }
+      });
+
+      // Lazy load missing customer profiles in background
+      if (missingUids.size > 0) {
+        await Promise.all(
+          Array.from(missingUids).map(async (uId) => {
+            try {
+              const uSnap = await getDoc(doc(db, 'users', uId));
+              if (uSnap.exists()) {
+                const uData = uSnap.data();
+                userCache[uId] = {
+                  fullName: uData.fullName || uData.displayName,
+                  email: uData.email,
+                  phoneNumber: uData.phoneNumber,
+                };
+              }
+            } catch (e) {
+              // Ignore profile read failure fallback
+            }
+          })
+        );
+      }
+
+      // Attach cached customer profile fields if appointment doc didn't store them
+      const enriched = list.map((item) => {
+        const u = userCache[item.customerUid];
+        return {
+          ...item,
+          customerName: item.customerName || u?.fullName || 'Customer',
+          customerEmail: item.customerEmail || u?.email,
+          customerPhone: item.customerPhone || u?.phoneNumber,
+        };
+      });
+
+      // Sort by createdAt descending (newest first)
+      enriched.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      callback(enriched);
+    },
+    (error) => {
+      console.error('Failed to listen to all customer appointments:', error);
+      if (onError) onError(error);
+    }
+  );
+
+  return unsubscribe;
+}

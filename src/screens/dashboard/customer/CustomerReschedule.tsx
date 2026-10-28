@@ -1,13 +1,19 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useNotifications } from '../../../contexts/NotificationsContext';
+import { useToast } from '../../../contexts/ToastContext';
 import { db } from '../../../lib/firebase';
-import { updateAppointment, calculateCallOutFee, type StoredAppointment } from '../../../lib/appointments';
+import {
+  updateAppointment,
+  calculateCallOutFee,
+  parseAppointmentDateTime,
+  type StoredAppointment,
+} from '../../../lib/appointments';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
-import { Calendar, Clock, Car, FileText, Hash, ArrowLeft, MapPin } from 'lucide-react';
+import { Calendar, Clock, Car, FileText, Hash, ArrowLeft, MapPin, AlertCircle, XCircle } from 'lucide-react';
 
 const PACKAGE_PRICES: Record<string, number> = {
   'Express Wash': 75,
@@ -21,16 +27,47 @@ const PACKAGE_PRICES: Record<string, number> = {
 export default function CustomerReschedule() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { appointmentId: routeApptId } = useParams<{ appointmentId?: string }>();
   const { currentUser } = useAuth();
   const { addNotification } = useNotifications();
+  const { showToast } = useToast();
   
-  const appointment = location.state?.appointment as StoredAppointment | undefined;
+  const stateAppt = location.state?.appointment as StoredAppointment | undefined;
+  const targetApptId = routeApptId || stateAppt?.id;
+  const [appointment, setAppointment] = useState<StoredAppointment | null>(stateAppt || null);
+  const [isLoading, setIsLoading] = useState(!stateAppt);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
+  // Subscribe to real-time appointment doc from Firestore to prevent overwriting newer admin updates
   useEffect(() => {
-    if (!appointment) {
+    if (!targetApptId) {
       navigate('/dashboard/customer/appointments', { replace: true });
+      return;
     }
-  }, [appointment, navigate]);
+
+    if (currentUser?.uid && targetApptId) {
+      const apptRef = doc(db, 'users', currentUser.uid, 'appointments', targetApptId);
+      const unsub = onSnapshot(
+        apptRef,
+        (docSnap) => {
+          if (docSnap.exists()) {
+            setAppointment({ id: docSnap.id, ...docSnap.data() } as StoredAppointment);
+          } else {
+            setErrorBanner('Appointment not found.');
+          }
+          setIsLoading(false);
+        },
+        (err) => {
+          console.warn('Failed to listen to live appointment in CustomerReschedule:', err);
+          setIsLoading(false);
+        }
+      );
+      return () => unsub();
+    } else {
+      setIsLoading(false);
+    }
+  }, [currentUser?.uid, targetApptId, navigate]);
 
   const [hasMembership, setHasMembership] = useState<boolean>(() => {
     if (!currentUser?.uid) return false;
@@ -50,7 +87,8 @@ export default function CustomerReschedule() {
     return () => unsub();
   }, [currentUser?.uid]);
 
-  const [date, setDate] = useState(() => appointment?.date || '2023-10-25');
+  const todayStr = new Date().toISOString().split('T')[0];
+  const [date, setDate] = useState(() => appointment?.date || todayStr);
   const [time, setTime] = useState(() => appointment?.time || '10:00');
   const [serviceType, setServiceType] = useState<'Call-out' | 'Drive-in'>(() => (appointment?.serviceType as any) || 'Call-out');
   const [streetAddress, setStreetAddress] = useState(() => appointment?.address || appointment?.location || '123 Main St, Apartment Complex');
@@ -61,19 +99,25 @@ export default function CustomerReschedule() {
   // Reset form state when incoming appointment changes (fixes stale form state bug)
   useEffect(() => {
     if (appointment) {
-      setDate(appointment.date || '2023-10-25');
+      setDate(appointment.date || todayStr);
       setTime(appointment.time || '10:00');
       setServiceType((appointment.serviceType as any) || 'Call-out');
       setStreetAddress(appointment.address || appointment.location || '123 Main St, Apartment Complex');
       setVehicle(appointment.vehicle || 'Ford F-150');
-      setPlate('XYZ 1234');
       setNotes(appointment.notes || '');
     }
-  }, [appointment?.id]);
+  }, [appointment?.id, todayStr]);
 
-  if (!appointment) {
-    return null;
+  if (isLoading || !appointment) {
+    return (
+      <div className="bg-[#171717] border border-[#2C2C2C] rounded-xl p-8 text-center text-[#A1A1AA]">
+        Loading appointment details...
+      </div>
+    );
   }
+
+  const isAlreadyCancelled = appointment.status === 'Cancelled';
+  const isAlreadyCompleted = appointment.completed === true || appointment.status === 'Completed';
 
   // Dynamic calculations for base price, call-out fee, subtotal, VAT (15%), and total
   const parseBasePrice = (priceStr?: string, pkgName?: string): number => {
@@ -95,35 +139,62 @@ export default function CustomerReschedule() {
   const formattedVat = `R${vatNum.toFixed(2)}`;
   const formattedTotal = `R${totalNum.toFixed(2)}`;
 
-  const handleReschedule = () => {
+  const handleReschedule = async () => {
+    setErrorBanner(null);
+
+    if (isAlreadyCancelled) {
+      showToast('Cannot reschedule a cancelled appointment.', 'error');
+      return;
+    }
+    if (isAlreadyCompleted) {
+      showToast('Cannot reschedule an already completed appointment.', 'error');
+      return;
+    }
+
+    // Validate that the rescheduled date is not in the past
+    const target = parseAppointmentDateTime(date, time);
+    if (target && target.getTime() < Date.now()) {
+      setErrorBanner('Rescheduled date and time cannot be in the past.');
+      return;
+    }
+
     const formattedAddress = serviceType === 'Call-out' ? streetAddress : '';
 
-    updateAppointment(
-      appointment.id,
-      {
-        ...appointment,
-        date,
-        time,
-        serviceType,
-        address: formattedAddress,
-        location: formattedAddress,
-        vehicle,
-        notes,
-        price: formattedTotal,
-      },
-      currentUser?.uid
-    );
+    setIsSubmitting(true);
+    try {
+      await updateAppointment(
+        appointment.id,
+        {
+          ...appointment,
+          date,
+          time,
+          serviceType,
+          address: formattedAddress,
+          location: formattedAddress,
+          vehicle,
+          notes,
+          price: formattedTotal,
+        },
+        currentUser?.uid
+      );
 
-    addNotification({
-      category: 'appointments',
-      icon: 'clock',
-      title: 'Appointment Rescheduled',
-      message: `Your appointment for ${appointment.packageName} has been rescheduled to ${date} at ${time}.`,
-      link: '/dashboard/customer/appointments',
-      eventId: `appt-resched-${appointment.id}-${Date.now()}`,
-    });
+      addNotification({
+        category: 'appointments',
+        icon: 'clock',
+        title: 'Appointment Rescheduled',
+        message: `Your appointment for ${appointment.packageName} has been rescheduled to ${date} at ${time}.`,
+        link: '/dashboard/customer/appointments',
+        eventId: `appt-resched-${appointment.id}-${Date.now()}`,
+      });
 
-    navigate('/dashboard/customer/appointments');
+      showToast('Appointment rescheduled successfully', 'success');
+      navigate('/dashboard/customer/appointments');
+    } catch (err: any) {
+      console.error('Customer reschedule failed:', err);
+      showToast(err?.message || 'Failed to reschedule appointment. Please try again.', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -132,14 +203,45 @@ export default function CustomerReschedule() {
       <div className="flex flex-col gap-1">
         <button 
           onClick={() => navigate('/dashboard/customer/appointments')}
-          className="flex items-center gap-1.5 text-sm text-[#E86A33] hover:text-[#cc5a2a] transition-colors w-fit mb-2"
+          className="flex items-center gap-1.5 text-sm text-[#E86A33] hover:text-[#cc5a2a] transition-colors w-fit mb-2 cursor-pointer font-medium"
         >
           <ArrowLeft className="w-4 h-4 text-[#E86A33]" />
           Back to Appointments
         </button>
         <h2 className="text-2xl font-bold font-display tracking-tight text-[#F5F5F5]">Reschedule Appointment</h2>
-        <p className="text-[#A1A1AA] text-sm">Details of the new booking</p>
+        <p className="text-[#A1A1AA] text-sm">Choose a new date and time for your booking</p>
       </div>
+
+      {/* Terminal State Alert */}
+      {isAlreadyCancelled && (
+        <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 flex items-start gap-3">
+          <XCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+          <div>
+            <h4 className="text-sm font-semibold text-red-400">Appointment is cancelled</h4>
+            <p className="text-xs text-red-300/80 mt-1">
+              Reason: "{appointment.cancelReason || 'Cancelled by administrator'}"
+            </p>
+          </div>
+        </div>
+      )}
+
+      {isAlreadyCompleted && (
+        <div className="p-4 rounded-xl bg-[#35B86B]/10 border border-[#35B86B]/30 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-[#35B86B] shrink-0 mt-0.5" />
+          <div>
+            <h4 className="text-sm font-semibold text-[#35B86B]">Appointment is completed</h4>
+            <p className="text-xs text-[#35B86B]/80 mt-1">
+              Completed bookings cannot be rescheduled.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {errorBanner && (
+        <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-400 font-medium">
+          {errorBanner}
+        </div>
+      )}
 
       <div className="flex flex-col lg:flex-row gap-6">
         {/* Left Column (Form) */}
@@ -152,11 +254,12 @@ export default function CustomerReschedule() {
               <button
                 type="button"
                 onClick={() => setServiceType('Call-out')}
-                className={`flex flex-col gap-1.5 p-4 rounded-xl border text-left transition-all ${
+                disabled={isAlreadyCancelled || isAlreadyCompleted || isSubmitting}
+                className={`flex flex-col gap-1.5 p-4 rounded-xl border text-left transition-all cursor-pointer ${
                   serviceType === 'Call-out'
                     ? 'bg-[#E86A33]/10 border-[#E86A33] text-[#F5F5F5]'
                     : 'bg-[#101010] border-[#2C2C2C] text-[#A1A1AA] hover:border-[#E86A33]/40'
-                }`}
+                } disabled:opacity-50`}
               >
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-sm text-[#F5F5F5]">Call-out</span>
@@ -172,11 +275,12 @@ export default function CustomerReschedule() {
               <button
                 type="button"
                 onClick={() => setServiceType('Drive-in')}
-                className={`flex flex-col gap-1.5 p-4 rounded-xl border text-left transition-all ${
+                disabled={isAlreadyCancelled || isAlreadyCompleted || isSubmitting}
+                className={`flex flex-col gap-1.5 p-4 rounded-xl border text-left transition-all cursor-pointer ${
                   serviceType === 'Drive-in'
                     ? 'bg-[#E86A33]/10 border-[#E86A33] text-[#F5F5F5]'
                     : 'bg-[#101010] border-[#2C2C2C] text-[#A1A1AA] hover:border-[#E86A33]/40'
-                }`}
+                } disabled:opacity-50`}
               >
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-sm text-[#F5F5F5]">Drive-in</span>
@@ -194,6 +298,7 @@ export default function CustomerReschedule() {
                   label="Street Address / Location"
                   placeholder="e.g. 123 Main St, Apartment Complex"
                   value={streetAddress}
+                  disabled={isAlreadyCancelled || isAlreadyCompleted || isSubmitting}
                   onChange={(e) => setStreetAddress(e.target.value)}
                   icon={<MapPin className="w-5 h-5" />}
                   className="!bg-[#101010] !border-[#2C2C2C] !text-[#F5F5F5] focus:!border-[#E86A33] focus:!ring-[#E86A33]"
@@ -215,6 +320,8 @@ export default function CustomerReschedule() {
                 type="date"
                 label="Select Date" 
                 value={date}
+                min={todayStr}
+                disabled={isAlreadyCancelled || isAlreadyCompleted || isSubmitting}
                 onChange={(e) => setDate(e.target.value)}
                 icon={<Calendar className="w-5 h-5" />} 
                 className="!bg-[#101010] !border-[#2C2C2C] !text-[#F5F5F5] focus:!border-[#E86A33] focus:!ring-[#E86A33] [color-scheme:dark]"
@@ -225,6 +332,7 @@ export default function CustomerReschedule() {
                 type="time"
                 label="Select Time" 
                 value={time}
+                disabled={isAlreadyCancelled || isAlreadyCompleted || isSubmitting}
                 onChange={(e) => setTime(e.target.value)}
                 icon={<Clock className="w-5 h-5" />} 
                 className="!bg-[#101010] !border-[#2C2C2C] !text-[#F5F5F5] focus:!border-[#E86A33] focus:!ring-[#E86A33] [color-scheme:dark]"
@@ -241,6 +349,7 @@ export default function CustomerReschedule() {
             <Input 
               label="Licence Plate" 
               value={plate}
+              disabled={isAlreadyCancelled || isAlreadyCompleted || isSubmitting}
               onChange={(e) => setPlate(e.target.value)}
               icon={<Hash className="w-5 h-5" />} 
               className="!bg-[#101010] !border-[#2C2C2C] !text-[#F5F5F5] focus:!border-[#E86A33] focus:!ring-[#E86A33]"
@@ -250,6 +359,7 @@ export default function CustomerReschedule() {
             <Input 
               label="Vehicle Make & Model" 
               value={vehicle}
+              disabled={isAlreadyCancelled || isAlreadyCompleted || isSubmitting}
               onChange={(e) => setVehicle(e.target.value)}
               icon={<Car className="w-5 h-5" />} 
               className="!bg-[#101010] !border-[#2C2C2C] !text-[#F5F5F5] focus:!border-[#E86A33] focus:!ring-[#E86A33]"
@@ -260,6 +370,7 @@ export default function CustomerReschedule() {
               label="Reason for reschedule (Optional)" 
               placeholder="e.g. Schedule conflict"
               value={notes}
+              disabled={isAlreadyCancelled || isAlreadyCompleted || isSubmitting}
               onChange={(e) => setNotes(e.target.value)}
               icon={<FileText className="w-5 h-5" />} 
               className="!bg-[#101010] !border-[#2C2C2C] !text-[#F5F5F5] placeholder:!text-[#71717A] focus:!border-[#E86A33] focus:!ring-[#E86A33]"
@@ -333,9 +444,11 @@ export default function CustomerReschedule() {
               variant="outline" 
               fullWidth 
               onClick={handleReschedule}
+              disabled={isAlreadyCancelled || isAlreadyCompleted || isSubmitting}
+              isLoading={isSubmitting}
               className="mt-4 !border-[#E86A33] !text-[#E86A33] hover:!bg-[#E86A33]/10 hover:!border-[#E86A33]"
             >
-              Reschedule
+              Confirm Reschedule
             </Button>
           </div>
         </div>

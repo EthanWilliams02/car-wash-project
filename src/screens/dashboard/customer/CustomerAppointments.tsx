@@ -148,12 +148,30 @@ export default function CustomerAppointments() {
     : DEFAULT_MOCK_APPOINTMENTS;
 
   const upcomingAppointments = allAppointments.filter((appt) => {
-    const dyn = getDynamicAppointmentStatus(appt.date, appt.time, appt.status === 'Missed', appt.completed, hasMembership, appt.status, appt.confirmed);
+    const dyn = getDynamicAppointmentStatus(
+      appt.date,
+      appt.time,
+      appt.status === 'Missed',
+      appt.completed,
+      hasMembership,
+      appt.status,
+      appt.confirmed,
+      appt.staffStatus
+    );
     return dyn.status !== 'Missed' && dyn.status !== 'Completed' && dyn.status !== 'Cancelled';
   });
 
   const historyAppointments = allAppointments.filter((appt) => {
-    const dyn = getDynamicAppointmentStatus(appt.date, appt.time, appt.status === 'Missed', appt.completed, hasMembership, appt.status, appt.confirmed);
+    const dyn = getDynamicAppointmentStatus(
+      appt.date,
+      appt.time,
+      appt.status === 'Missed',
+      appt.completed,
+      hasMembership,
+      appt.status,
+      appt.confirmed,
+      appt.staffStatus
+    );
     return dyn.status === 'Missed' || dyn.status === 'Completed' || dyn.status === 'Cancelled';
   });
 
@@ -170,15 +188,15 @@ export default function CustomerAppointments() {
         <div className="flex items-center gap-6">
           <button 
             onClick={() => setActiveTab('upcoming')}
-            className={`font-medium text-[15px] pb-4 -mb-[17px] transition-colors ${activeTab === 'upcoming' ? 'text-[#E86A33] border-b-2 border-[#E86A33]' : 'text-[#A1A1AA] hover:text-[#F5F5F5]'}`}
+            className={`font-medium text-[15px] pb-4 -mb-[17px] transition-colors cursor-pointer ${activeTab === 'upcoming' ? 'text-[#E86A33] border-b-2 border-[#E86A33]' : 'text-[#A1A1AA] hover:text-[#F5F5F5]'}`}
           >
-            Upcoming Appointments
+            Upcoming Appointments ({upcomingAppointments.length})
           </button>
           <button 
             onClick={() => setActiveTab('history')}
-            className={`font-medium text-[15px] pb-4 -mb-[17px] transition-colors ${activeTab === 'history' ? 'text-[#E86A33] border-b-2 border-[#E86A33]' : 'text-[#A1A1AA] hover:text-[#F5F5F5]'}`}
+            className={`font-medium text-[15px] pb-4 -mb-[17px] transition-colors cursor-pointer ${activeTab === 'history' ? 'text-[#E86A33] border-b-2 border-[#E86A33]' : 'text-[#A1A1AA] hover:text-[#F5F5F5]'}`}
           >
-            History
+            History ({historyAppointments.length})
           </button>
         </div>
         <Button variant="primary" onClick={() => navigate('/dashboard/customer/packages')}>
@@ -193,10 +211,20 @@ export default function CustomerAppointments() {
           <>
             {upcomingAppointments.length > 0 ? (
               upcomingAppointments.map((appt) => {
-                const dynamic = getDynamicAppointmentStatus(appt.date, appt.time, appt.status === 'Missed', appt.completed, hasMembership, appt.status, appt.confirmed);
+                const dynamic = getDynamicAppointmentStatus(
+                  appt.date,
+                  appt.time,
+                  appt.status === 'Missed',
+                  appt.completed,
+                  hasMembership,
+                  appt.status,
+                  appt.confirmed,
+                  appt.staffStatus
+                );
                 return (
                   <AppointmentCard
                     key={appt.id}
+                    id={appt.id}
                     date={appt.date}
                     time={appt.time}
                     serviceType={appt.serviceType}
@@ -210,8 +238,11 @@ export default function CustomerAppointments() {
                     completed={appt.completed}
                     confirmed={appt.confirmed}
                     hasMembership={hasMembership}
+                    rescheduledByOwner={appt.rescheduledByOwner}
+                    previousSchedule={appt.previousSchedule}
+                    cancelReason={appt.cancelReason}
                     onReschedule={() => {
-                      navigate('/dashboard/customer/appointments/reschedule', {
+                      navigate(`/dashboard/customer/appointments/reschedule/${appt.id}`, {
                         state: {
                           appointment: {
                             ...appt,
@@ -224,7 +255,7 @@ export default function CustomerAppointments() {
                       });
                     }}
                     onCancel={() => {
-                      navigate('/dashboard/customer/appointments/cancel', {
+                      navigate(`/dashboard/customer/appointments/cancel/${appt.id}`, {
                         state: {
                           appointment: {
                             ...appt,
@@ -251,10 +282,20 @@ export default function CustomerAppointments() {
           <>
             {historyAppointments.length > 0 ? (
               historyAppointments.map((appt) => {
-                const dynamic = getDynamicAppointmentStatus(appt.date, appt.time, appt.status === 'Missed', appt.completed, hasMembership, appt.status, appt.confirmed);
+                const dynamic = getDynamicAppointmentStatus(
+                  appt.date,
+                  appt.time,
+                  appt.status === 'Missed',
+                  appt.completed,
+                  hasMembership,
+                  appt.status,
+                  appt.confirmed,
+                  appt.staffStatus
+                );
                 return (
                   <AppointmentCard
                     key={appt.id}
+                    id={appt.id}
                     date={appt.date}
                     time={appt.time}
                     serviceType={appt.serviceType}
@@ -270,8 +311,11 @@ export default function CustomerAppointments() {
                     completed={appt.completed}
                     confirmed={appt.confirmed}
                     hasMembership={hasMembership}
+                    rescheduledByOwner={appt.rescheduledByOwner}
+                    previousSchedule={appt.previousSchedule}
+                    cancelReason={appt.cancelReason}
                     onReschedule={() => {
-                      navigate('/dashboard/customer/appointments/reschedule', {
+                      navigate(`/dashboard/customer/appointments/reschedule/${appt.id}`, {
                         state: {
                           appointment: {
                             ...appt,
@@ -284,7 +328,7 @@ export default function CustomerAppointments() {
                       });
                     }}
                     onCancel={() => {
-                      navigate('/dashboard/customer/appointments/cancel', {
+                      navigate(`/dashboard/customer/appointments/cancel/${appt.id}`, {
                         state: {
                           appointment: {
                             ...appt,
@@ -314,6 +358,7 @@ export default function CustomerAppointments() {
 
 // Helper component for the Card to keep code clean
 function AppointmentCard({ 
+  id: _id,
   date, 
   time, 
   serviceType,
@@ -329,10 +374,22 @@ function AppointmentCard({
   completed,
   confirmed,
   hasMembership,
+  rescheduledByOwner,
+  previousSchedule,
+  cancelReason,
   onReschedule, 
   onCancel 
 }: any) {
-  const dynamic = getDynamicAppointmentStatus(date, time, propIsMissed, completed, hasMembership, isCancelled ? 'Cancelled' : undefined, confirmed);
+  const dynamic = getDynamicAppointmentStatus(
+    date,
+    time,
+    propIsMissed,
+    completed,
+    hasMembership,
+    isCancelled ? 'Cancelled' : undefined,
+    confirmed,
+    staffStatus
+  );
 
   const status = dynamic.status;
   const statusColor = dynamic.statusColor;
@@ -363,13 +420,23 @@ function AppointmentCard({
       
       {/* Column 1: Status & Time */}
       <div className="flex-1 flex flex-col gap-3">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border ${getBadgeStyles(statusColor)}`}>
             {status}
           </span>
           {serviceType && (
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-[#1F1F1F] text-[#A1A1AA] border border-[#2C2C2C]">
               {serviceType}
+            </span>
+          )}
+          {rescheduledByOwner && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-[#E86A33]/15 text-[#E86A33] border border-[#E86A33]/30">
+              Rescheduled by owner
+            </span>
+          )}
+          {dynamic.isRefundEligible && status !== 'Cancelled' && status !== 'Completed' && status !== 'Missed' && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-[#35B86B]/15 text-[#35B86B] border border-[#35B86B]/30">
+              Refund Eligible
             </span>
           )}
         </div>
@@ -382,6 +449,11 @@ function AppointmentCard({
             <Clock className="w-4 h-4 text-[#E86A33]" />
             {time}
           </div>
+          {previousSchedule && (
+            <div className="text-[11px] text-[#71717A] line-through pl-6">
+              Was: {previousSchedule.date} at {previousSchedule.time}
+            </div>
+          )}
           {serviceType !== 'Drive-in' && displayAddress ? (
             <div className="flex items-center gap-2 text-[#A1A1AA] text-sm">
               <MapPin className="w-4 h-4 shrink-0 text-[#E86A33]" />
@@ -412,6 +484,12 @@ function AppointmentCard({
             <ChevronRight className="w-5 h-5" />
           </button>
         </div>
+
+        {cancelReason && (
+          <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg p-2.5">
+            <span className="font-semibold">Reason:</span> "{cancelReason}"
+          </div>
+        )}
       </div>
 
       {/* Column 3: Actions & Policy */}

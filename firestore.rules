@@ -13,19 +13,72 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // 3. Rules for user profiles and their subcollections
-    // (e.g. appointments, vehicles, reviews, paymentMethods)
-    match /users/{userId} {
-      // Users can only read/write their own user document
-      allow read, write: if isOwner(userId);
+    // 3. Helper Function: Check if the user has an admin role
+    function isAdmin() {
+      return isAuthenticated() && (
+        (request.auth.token.role == 'admin') ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
 
-      // Users can only read/write documents in their own subcollections
+    // 4. Rules for user profiles and their subcollections
+    match /users/{userId} {
+      // Users can read their own profile; admins can read all profiles to view customer contact info
+      allow read: if isOwner(userId) || isAdmin();
+      
+      // Customers cannot set role to admin on signup
+      allow create: if (isOwner(userId) && (!('role' in request.resource.data) || request.resource.data.role == 'customer')) || isAdmin();
+      
+      // Users cannot elevate their own role to admin; admins can update profiles
+      allow update: if (isOwner(userId) && (!('role' in request.resource.data) || request.resource.data.role == resource.data.role)) || isAdmin();
+      allow delete: if isAdmin();
+
+      // Specific rule for appointments:
+      // Customers cannot confirm their own bookings or alter terminal (cancelled/completed) bookings
+      match /appointments/{appointmentId} {
+        allow read: if isOwner(userId) || isAdmin();
+        
+        // Creation must start unconfirmed
+        allow create: if (isOwner(userId) && 
+                         (!('confirmed' in request.resource.data) || request.resource.data.confirmed == false) &&
+                         (!('status' in request.resource.data) || request.resource.data.status == 'Awaiting Confirmation'))
+                      || isAdmin();
+        
+        // Customer updates cannot self-confirm or overwrite cancelled/completed appointments
+        allow update: if isAdmin() || (
+          isOwner(userId) &&
+          (!('confirmed' in request.resource.data) || request.resource.data.confirmed == resource.data.confirmed) &&
+          resource.data.status != 'Cancelled' &&
+          (!('completed' in resource.data) || resource.data.completed != true)
+        );
+        
+        allow delete: if isAdmin();
+      }
+
+      // Specific rule for notifications:
+      // Admins need write access to create appointment update notifications for customers
+      match /notifications/{notificationId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create, update: if isOwner(userId) || isAdmin();
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+
+      // Other subcollections (e.g. vehicles, reviews, paymentMethods, redeemedRewards)
       match /{subcollection}/{document=**} {
-        allow read, write: if isOwner(userId);
+        allow read, write: if isOwner(userId) && subcollection != 'appointments' && subcollection != 'notifications';
       }
     }
 
-    // 4. Rule for staff registration 
+    // 5. Collection group rule for appointments (used by admin and staff dashboards)
+    match /{path=**}/appointments/{appointmentId} {
+      allow read: if isAdmin() || 
+                     (isAuthenticated() && resource.data.assignedStaffUid == request.auth.uid) || 
+                     (isAuthenticated() && resource.data.customerUid == request.auth.uid);
+      allow write: if isAdmin();
+    }
+
+    // 6. Rule for staff registration 
     match /pre_registered_staff/{document=**} {
       // Anyone can read this to verify their email during signup
       allow read: if true;
@@ -33,16 +86,17 @@ service cloud.firestore {
       allow write: if false; 
     }
 
-    // 5. Rule for settings
+    // 7. Rule for settings
     match /settings/{document=**} {
       allow read: if true; // Allowed so staff can read access codes during signup
       allow write: if false;
     }
 
-    // 6. Default fallback to lock down anything else not explicitly allowed above
+    // 8. Default fallback to lock down anything else not explicitly allowed above
     match /{document=**} {
       allow read, write: if false;
     }
     
   }
 }
+

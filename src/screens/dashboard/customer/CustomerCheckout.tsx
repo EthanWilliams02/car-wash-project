@@ -133,12 +133,19 @@ export default function CustomerCheckout() {
   // Voucher state
   const [appliedVoucher, setAppliedVoucher] = useState<RedeemedReward | null>(null);
 
+  const [userProfile, setUserProfile] = useState<{ fullName?: string; phoneNumber?: string } | null>(null);
+
   useEffect(() => {
     if (!currentUser?.uid) return;
     const unsub = onSnapshot(doc(db, "users", currentUser.uid), (snap) => {
       if (snap.exists()) {
-        const mem = snap.data()?.hasMembership === true;
+        const data = snap.data();
+        const mem = data?.hasMembership === true;
         setHasMembership(mem);
+        setUserProfile({
+          fullName: data?.fullName || data?.displayName,
+          phoneNumber: data?.phoneNumber,
+        });
         localStorage.setItem(`ww_has_membership_${currentUser.uid}`, JSON.stringify(mem));
       }
     });
@@ -251,8 +258,10 @@ export default function CustomerCheckout() {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handlePayment = (e: React.FormEvent) => {
+  const handlePayment = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (isLoading) return; // Prevent duplicate submissions
 
     if (!validateForm()) {
       showToast('Please check the required payment fields.', 'error');
@@ -261,136 +270,129 @@ export default function CustomerCheckout() {
 
     setIsLoading(true);
 
-    // Simulate payment processing delay
-    setTimeout(async () => {
+    try {
+      const formattedAddress = serviceType === 'Call-out' ? (streetAddress ? `${streetAddress}, ${city}` : '123 Main St, Apartment Complex') : '';
+      const apptId = `WW-${Math.floor(100000 + Math.random() * 900000)}`;
+
+      // Create new appointment and save to localStorage / Firestore
+      const customerName = userProfile?.fullName || currentUser?.displayName || cardHolder || 'Customer';
+      const customerEmail = currentUser?.email || '';
+      const customerPhone = userProfile?.phoneNumber || currentUser?.phoneNumber || '';
+
+      const newAppointment: StoredAppointment = {
+        id: apptId,
+        customerUid: currentUser?.uid,
+        customerName,
+        customerEmail,
+        customerPhone,
+        packageName: pkg.name,
+        price: fmt(total),
+        date: displayDate,
+        time: displayTime,
+        serviceType,
+        address: formattedAddress,
+        location: formattedAddress,
+        vehicle: bookingVehicle ? `${bookingVehicle}${bookingPlate ? ` (${bookingPlate})` : ''}` : 'Tesla Model 3',
+        notes: bookingNotes || '',
+        confirmed: false,
+        status: 'Awaiting Confirmation',
+        statusColor: 'amber',
+        staffName: 'Pending Assignment',
+        staffStatus: 'Finding Staff...',
+        isLocked: false,
+        cancellationPolicy: 'This booking is awaiting confirmation from our team.',
+        createdAt: Date.now(),
+      };
+
+      // Critical: Save appointment to database must succeed before confirming payment
+      await saveAppointment(newAppointment, currentUser?.uid);
+
+      // 1. Appointment Booked notification
       try {
-        setIsLoading(false);
-
-        const formattedAddress = serviceType === 'Call-out' ? (streetAddress ? `${streetAddress}, ${city}` : '123 Main St, Apartment Complex') : '';
-        const apptId = `WW-${Math.floor(100000 + Math.random() * 900000)}`;
-
-        // Create new appointment and save to localStorage / Firestore
-        const newAppointment: StoredAppointment = {
-          id: apptId,
-          packageName: pkg.name,
-          price: fmt(total),
-          date: displayDate,
-          time: displayTime,
-          serviceType,
-          address: formattedAddress,
-          location: formattedAddress,
-          vehicle: bookingVehicle ? `${bookingVehicle}${bookingPlate ? ` (${bookingPlate})` : ''}` : 'Tesla Model 3',
-          notes: bookingNotes || '',
-          confirmed: false,
-          status: 'Awaiting Confirmation',
-          statusColor: 'amber',
-          staffName: 'Pending Assignment',
-          staffStatus: 'Finding Staff...',
-          isLocked: false,
-          cancellationPolicy: 'This booking is awaiting confirmation from our team.',
-          createdAt: Date.now(),
-        };
-
-        try {
-          saveAppointment(newAppointment, currentUser?.uid);
-        } catch (e) {
-          console.warn('saveAppointment error caught:', e);
-        }
-        
-        // 1. Appointment Booked notification
-        try {
-          addNotification({
-            category: 'appointments',
-            icon: 'calendar',
-            title: 'Appointment Booked',
-            message: `Your appointment for ${pkg.name} has been successfully booked for ${displayDate} at ${displayTime}.`,
-            link: '/dashboard/customer/appointments',
-            eventId: `appt-booked-${newAppointment.id}`,
-          });
-        } catch (e) {
-          console.warn('Notification 1 error caught:', e);
-        }
-
-        // 2. Payment Successful notification
-        try {
-          addNotification({
-            category: 'system',
-            icon: 'check',
-            title: 'Payment Successful',
-            message: `Your payment of ${fmt(total)} for ${pkg.name} was processed successfully.`,
-            link: '/dashboard/customer/profile',
-            eventId: `pay-success-${newAppointment.id}`,
-          });
-        } catch (e) {
-          console.warn('Notification 2 error caught:', e);
-        }
-        
-        // Mark voucher as used ONLY after successful booking / payment
-        if (appliedVoucher && voucherResult?.applies) {
-          try {
-            markVoucherUsed(appliedVoucher.id, currentUser?.uid);
-            // 3. Promotion/Voucher Redeemed notification
-            addNotification({
-              category: 'promotions',
-              icon: 'gift',
-              title: 'Promotion Redeemed',
-              message: `Your "${appliedVoucher.rewardTitle}" promotion has been successfully applied to your booking.`,
-              link: '/dashboard/customer/packages',
-              eventId: `voucher-used-${appliedVoucher.id}-${newAppointment.id}`,
-            });
-          } catch (e) {
-            console.warn('Voucher notification error caught:', e);
-          }
-        }
-
-        // Award reward points idempotently with fixed values
-        try {
-          await awardBookingPoints(currentUser?.uid, newAppointment.id, pkg.name, customOptionCount);
-        } catch (e) {
-          console.warn('awardBookingPoints error caught:', e);
-        }
-
-        // 4. Reward Points Added notification
-        if (pointsEarned > 0) {
-          try {
-            addNotification({
-              category: 'rewards',
-              icon: 'star',
-              title: 'Reward Points Added',
-              message: `You've earned ${pointsEarned} reward points for your recent ${pkg.name}.`,
-              link: '/dashboard/customer/rewards',
-              eventId: `points-awarded-${newAppointment.id}`,
-            });
-          } catch (e) {
-            console.warn('Points notification error caught:', e);
-          }
-        }
-
-        showToast(`Payment of ${fmt(total)} confirmed! +${pointsEarned} reward points added.`, 'success');
-
-        setPaymentSuccessInfo({
-          itemName: pkg.name,
-          amount: fmt(total),
-          paymentType: 'appointment',
-          appointmentDate: displayDate,
-          appointmentTime: displayTime,
-          reference: newAppointment.id,
+        addNotification({
+          category: 'appointments',
+          icon: 'calendar',
+          title: 'Appointment Booked',
+          message: `Your appointment for ${pkg.name} has been successfully booked for ${displayDate} at ${displayTime}.`,
+          link: '/dashboard/customer/appointments',
+          eventId: `appt-booked-${newAppointment.id}`,
         });
-        setShowPaymentSuccess(true);
-      } catch (err) {
-        console.error('Payment processing fallback:', err);
-        setIsLoading(false);
-        setPaymentSuccessInfo({
-          itemName: pkg.name,
-          amount: fmt(total),
-          paymentType: 'appointment',
-          appointmentDate: displayDate,
-          appointmentTime: displayTime,
-          reference: `WW-${Math.floor(100000 + Math.random() * 900000)}`,
-        });
-        setShowPaymentSuccess(true);
+      } catch (e) {
+        console.warn('Notification 1 error caught:', e);
       }
-    }, 1000);
+
+      // 2. Payment Successful notification
+      try {
+        addNotification({
+          category: 'system',
+          icon: 'check',
+          title: 'Payment Successful',
+          message: `Your payment of ${fmt(total)} for ${pkg.name} was processed successfully.`,
+          link: '/dashboard/customer/profile',
+          eventId: `pay-success-${newAppointment.id}`,
+        });
+      } catch (e) {
+        console.warn('Notification 2 error caught:', e);
+      }
+      
+      // Mark voucher as used ONLY after successful booking / payment
+      if (appliedVoucher && voucherResult?.applies) {
+        try {
+          markVoucherUsed(appliedVoucher.id, currentUser?.uid);
+          // 3. Promotion/Voucher Redeemed notification
+          addNotification({
+            category: 'promotions',
+            icon: 'gift',
+            title: 'Promotion Redeemed',
+            message: `Your "${appliedVoucher.rewardTitle}" promotion has been successfully applied to your booking.`,
+            link: '/dashboard/customer/packages',
+            eventId: `voucher-used-${appliedVoucher.id}-${newAppointment.id}`,
+          });
+        } catch (e) {
+          console.warn('Voucher notification error caught:', e);
+        }
+      }
+
+      // Award reward points idempotently with fixed values
+      try {
+        await awardBookingPoints(currentUser?.uid, newAppointment.id, pkg.name, customOptionCount);
+      } catch (e) {
+        console.warn('awardBookingPoints error caught:', e);
+      }
+
+      // 4. Reward Points Added notification
+      if (pointsEarned > 0) {
+        try {
+          addNotification({
+            category: 'rewards',
+            icon: 'star',
+            title: 'Reward Points Added',
+            message: `You've earned ${pointsEarned} reward points for your recent ${pkg.name}.`,
+            link: '/dashboard/customer/rewards',
+            eventId: `points-awarded-${newAppointment.id}`,
+          });
+        } catch (e) {
+          console.warn('Points notification error caught:', e);
+        }
+      }
+
+      showToast(`Payment of ${fmt(total)} confirmed! +${pointsEarned} reward points added.`, 'success');
+
+      setPaymentSuccessInfo({
+        itemName: pkg.name,
+        amount: fmt(total),
+        paymentType: 'appointment',
+        appointmentDate: displayDate,
+        appointmentTime: displayTime,
+        reference: newAppointment.id,
+      });
+      setShowPaymentSuccess(true);
+    } catch (err: any) {
+      console.error('Payment / booking database write failed:', err);
+      showToast(err?.message || 'Failed to complete booking. Please try again.', 'error');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
