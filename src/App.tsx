@@ -36,6 +36,10 @@ import StaffReviews from './screens/dashboard/staff/StaffReviews';
 import StaffProfile from './screens/dashboard/staff/StaffProfile';
 import AdminDashboardLayout from './screens/dashboard/admin/AdminDashboardLayout';
 import AdminDashboard from './screens/dashboard/admin/AdminDashboard';
+import AdminServiceManagement from './screens/dashboard/admin/AdminServiceManagement';
+import AdminAppointments from './screens/dashboard/admin/AdminAppointments';
+import AdminBusinessAnalytics from './screens/dashboard/admin/AdminBusinessAnalytics';
+import AdminReviews from './screens/dashboard/admin/AdminReviews';
 import { AuthProvider } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { ThemeProvider } from './contexts/ThemeContext';
@@ -95,6 +99,10 @@ export default function App() {
             </Route>
             <Route path="/dashboard/admin" element={<AdminDashboardLayout />}>
               <Route index element={<AdminDashboard />} />
+              <Route path="service-management" element={<AdminServiceManagement />} />
+              <Route path="appointments" element={<AdminAppointments />} />
+              <Route path="business-analytics" element={<AdminBusinessAnalytics />} />
+              <Route path="reviews" element={<AdminReviews />} />
             </Route>
           </Routes>
           </BrowserRouter>

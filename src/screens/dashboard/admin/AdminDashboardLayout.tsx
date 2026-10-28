@@ -1,6 +1,16 @@
 import { useState, useEffect } from "react";
 import { Outlet, Link, Navigate, useLocation, useNavigate } from "react-router-dom";
-import { LayoutDashboard, LogOut, Menu, ShieldCheck, X } from "lucide-react";
+import {
+  LayoutDashboard,
+  Wrench,
+  CalendarDays,
+  BarChart3,
+  Star,
+  LogOut,
+  Menu,
+  ShieldCheck,
+  X,
+} from "lucide-react";
 import { signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "../../../lib/firebase";
@@ -48,6 +58,11 @@ export default function AdminDashboardLayout() {
   // Mobile sidebar state
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
+  // Close mobile sidebar on route change
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
+
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
@@ -78,7 +93,28 @@ export default function AdminDashboardLayout() {
       icon: <LayoutDashboard className="w-4 h-4" />,
       exact: true,
     },
+    {
+      name: "Service Management",
+      path: "/dashboard/admin/service-management",
+      icon: <Wrench className="w-4 h-4" />,
+    },
+    {
+      name: "Appointment",
+      path: "/dashboard/admin/appointments",
+      icon: <CalendarDays className="w-4 h-4" />,
+    },
+    {
+      name: "Business Analytics",
+      path: "/dashboard/admin/business-analytics",
+      icon: <BarChart3 className="w-4 h-4" />,
+    },
+    {
+      name: "Reviews",
+      path: "/dashboard/admin/reviews",
+      icon: <Star className="w-4 h-4" />,
+    },
   ];
+
 
   return (
     <div className={theme}>
