@@ -2,13 +2,18 @@ import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
+const env: Record<string, string | undefined> =
+  (typeof import.meta !== 'undefined' && (import.meta as any).env) ||
+  (typeof process !== 'undefined' ? (process as any).env : {}) ||
+  {};
+
 const firebaseConfig = {
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'car-wash-demo',
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:123456:web:abcdef',
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'car-wash-demo.appspot.com',
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyDemoApiKeyForCarWashProject',
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'car-wash-demo.firebaseapp.com',
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '1234567890',
+  projectId: env.VITE_FIREBASE_PROJECT_ID || 'washwizzy-dev-49122',
+  appId: env.VITE_FIREBASE_APP_ID || '1:186558950093:web:c3a1341a464a802f4a1784',
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || 'washwizzy-dev-49122.firebasestorage.app',
+  apiKey: env.VITE_FIREBASE_API_KEY || 'AIzaSyBvH-lIqxoc64EE44044l7XZQ9aSYOa0t0',
+  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || 'washwizzy-dev-49122.firebaseapp.com',
+  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || '186558950093',
 };
 
 export const app = initializeApp(firebaseConfig);

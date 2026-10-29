@@ -205,8 +205,8 @@ export default function CustomerDashboard() {
         </div>
 
         <div className="bg-[#171717] border border-[#2C2C2C] rounded-xl p-4 flex flex-col gap-1">
-          <span className="text-xs text-[#E86A33] font-medium">Confirmed Bookings</span>
-          <span className="text-2xl font-bold font-display text-[#E86A33] mt-1">
+          <span className="text-xs text-[#35B86B] font-medium">Confirmed Bookings</span>
+          <span className="text-2xl font-bold font-display text-[#35B86B] mt-1">
             {confirmedCount}
           </span>
           <span className="text-[11px] text-[#A1A1AA]">Ready on schedule</span>
@@ -247,7 +247,7 @@ export default function CustomerDashboard() {
                     Awaiting Confirmation
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-[#E86A33]/15 text-[#E86A33] border border-[#E86A33]/30">
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-[#35B86B]/15 text-[#35B86B] border border-[#35B86B]/30">
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     Confirmed by Owner
                   </span>

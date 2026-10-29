@@ -1,39 +1,43 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
-  collectionGroup,
-  query,
-  where,
-  onSnapshot,
-} from 'firebase/firestore';
-import {
   Calendar,
+  Clock,
   Car,
   Info,
   Check,
   X,
-  CalendarDays,
+  Phone,
+  Mail,
+  MapPin,
+  CheckCircle2,
+  FileText,
 } from 'lucide-react';
 import { Button } from '../../../components/ui/Button';
 import { useAuth } from '../../../contexts/AuthContext';
-import { db } from '../../../lib/firebase';
-import { parseAppointmentDateTime, markAppointmentCompleted } from '../../../lib/appointments';
+import {
+  subscribeToStaffAppointments,
+  parseAppointmentDateTime,
+  markAppointmentCompleted,
+} from '../../../lib/appointments';
 
 interface StaffAppointmentItem {
   id: string;
   customerUid: string;
-  docPath: string;
   date: string;
   time: string;
   customerName: string;
+  customerEmail?: string;
+  phone?: string;
   serviceName: string;
+  serviceType?: string;
   badgeColor: string;
+  status: string;
   vehicle: string;
   staffName: string;
   assignedStaffUid?: string;
   completed: boolean;
   price?: string;
   location?: string;
-  phone?: string;
   notes?: string;
 }
 
@@ -56,22 +60,8 @@ export default function StaffAppointments() {
       case 'reward-green':
         return 'bg-[#35B86B]/15 text-[#35B86B] border-[#35B86B]/30';
       default:
-        return 'bg-[#1F1F1F] text-[#A1A1AA] border-[#2C2C2C]';
+        return 'bg-[#35B86B]/15 text-[#35B86B] border-[#35B86B]/30';
     }
-  };
-
-  // Helper to parse time string into bold hour and period (AM/PM)
-  const formatTimeDisplay = (timeStr?: string): { hour: string; period: string } => {
-    if (!timeStr) return { hour: '--:--', period: '' };
-    const startTimePart = timeStr.split('-')[0].trim();
-    const match = startTimePart.match(/^(\d{1,2}:\d{2})\s*(AM|PM)?$/i);
-    if (match) {
-      return {
-        hour: match[1],
-        period: (match[2] || 'AM').toUpperCase(),
-      };
-    }
-    return { hour: startTimePart, period: '' };
   };
 
   // Helper to check if an appointment date is today
@@ -91,7 +81,7 @@ export default function StaffAppointments() {
     );
   };
 
-  // Listen to Firestore collectionGroup appointments for the logged-in staff member
+  // Listen in real-time to Firestore collectionGroup appointments for the logged-in staff member
   useEffect(() => {
     if (!currentUser?.uid) {
       setAppointments([]);
@@ -100,42 +90,35 @@ export default function StaffAppointments() {
     }
 
     setIsLoading(true);
-    const apptsQuery = query(
-      collectionGroup(db, 'appointments'),
-      where('assignedStaffUid', '==', currentUser.uid)
-    );
 
-    const unsubscribe = onSnapshot(
-      apptsQuery,
-      (snapshot) => {
-        const list: StaffAppointmentItem[] = [];
-        snapshot.forEach((docSnap) => {
-          const data = docSnap.data();
-          const customerUid = docSnap.ref.parent.parent?.id || '';
-          list.push({
-            id: docSnap.id,
-            customerUid,
-            docPath: docSnap.ref.path,
-            date: data.date || '',
-            time: data.time || '',
-            customerName: data.customerName || data.userName || 'Customer',
-            serviceName: data.packageName || data.serviceName || 'Car Wash Service',
-            badgeColor: data.statusColor || data.badgeColor || 'orange',
-            vehicle: data.vehicle || 'Vehicle',
-            staffName: data.staffName || 'Staff',
-            assignedStaffUid: data.assignedStaffUid,
-            completed: Boolean(data.completed),
-            price: data.price,
-            location: data.address || data.location,
-            phone: data.phone || data.userPhone,
-            notes: data.notes,
-          });
-        });
-        setAppointments(list);
+    const unsubscribe = subscribeToStaffAppointments(
+      currentUser.uid,
+      (list) => {
+        const mapped: StaffAppointmentItem[] = list.map((data) => ({
+          id: data.id,
+          customerUid: data.customerUid,
+          date: data.date || '',
+          time: data.time || '',
+          customerName: data.customerName || 'Customer',
+          customerEmail: data.customerEmail || data.email,
+          phone: data.customerPhone || data.phone,
+          serviceName: data.packageName || 'Car Wash Service',
+          serviceType: data.serviceType || 'Standard',
+          badgeColor: data.completed ? 'reward-green' : (data.statusColor || 'reward-green'),
+          status: data.completed ? 'Completed' : (data.status || 'Confirmed'),
+          vehicle: data.vehicle || 'Standard Vehicle',
+          staffName: data.staffName || 'Staff',
+          assignedStaffUid: data.assignedStaffUid,
+          completed: Boolean(data.completed),
+          price: data.price,
+          location: data.address || data.location,
+          notes: data.notes,
+        }));
+        setAppointments(mapped);
         setIsLoading(false);
       },
       (error) => {
-        console.error('Failed to listen to staff appointments via collectionGroup:', error);
+        console.error('Failed to listen to staff appointments:', error);
         setIsLoading(false);
       }
     );
@@ -168,7 +151,14 @@ export default function StaffAppointments() {
     // Optimistic local state update
     setAppointments((prev) =>
       prev.map((item) =>
-        item.id === appt.id ? { ...item, completed: nextCompleted } : item
+        item.id === appt.id
+          ? {
+              ...item,
+              completed: nextCompleted,
+              status: nextCompleted ? 'Completed' : 'Confirmed',
+              badgeColor: 'reward-green',
+            }
+          : item
       )
     );
 
@@ -192,7 +182,7 @@ export default function StaffAppointments() {
               My Assigned Jobs
             </h2>
             <p className="text-xs text-[#A1A1AA] mt-0.5">
-              Review and manage bookings assigned to you by the owner
+              Review and manage bookings assigned directly to you by the owner
             </p>
           </div>
         </div>
@@ -260,92 +250,160 @@ export default function StaffAppointments() {
         ) : displayedAppointments.length > 0 ? (
           <div className="flex flex-col gap-4">
             {displayedAppointments.map((appt) => {
-              const timeDisplay = formatTimeDisplay(appt.time);
               const isToday = isAppointmentToday(appt.date, appt.time);
 
               return (
                 <div
                   key={appt.id}
-                  className="bg-[#171717] border border-[#2C2C2C] rounded-xl p-5 shadow-sm hover:border-[#E86A33]/40 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                  className="bg-[#171717] border border-[#2C2C2C] rounded-2xl p-5 md:p-6 shadow-sm hover:border-[#35B86B]/40 transition-colors flex flex-col gap-4"
                 >
-                  {/* Left cluster: Time + Scheduled Date + Customer Info + Vehicle */}
-                  <div className="flex flex-col sm:flex-row sm:items-center gap-4 flex-1 min-w-0">
-                    {/* Time: Bold, stacked AM/PM */}
-                    <div className="flex flex-col items-center justify-center min-w-[60px] sm:min-w-[68px] shrink-0 text-center sm:border-r sm:border-[#2C2C2C] sm:pr-4">
-                      <span className="text-xl font-bold font-display text-[#F5F5F5] leading-none">
-                        {timeDisplay.hour}
+                  {/* Row 1: Status, Reference ID, Service Type, Price */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#2C2C2C] pb-3">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${getBadgeStyles(
+                          appt.badgeColor
+                        )}`}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        {appt.status}
                       </span>
-                      {timeDisplay.period && (
-                        <span className="text-xs font-semibold text-[#A1A1AA] tracking-wider uppercase mt-1">
-                          {timeDisplay.period}
+
+                      <span className="font-mono text-xs font-bold text-[#A1A1AA] bg-[#101010] px-2.5 py-1 rounded-lg border border-[#2C2C2C]">
+                        #{appt.id}
+                      </span>
+
+                      {appt.serviceType && (
+                        <span className="text-xs px-2.5 py-1 rounded-lg bg-[#101010] text-[#D4D4D4] border border-[#2C2C2C] font-medium">
+                          {appt.serviceType}
+                        </span>
+                      )}
+
+                      {isToday && (
+                        <span className="text-[11px] font-semibold text-[#35B86B] bg-[#35B86B]/10 px-2 py-0.5 rounded-full border border-[#35B86B]/20">
+                          Today&apos;s Job
                         </span>
                       )}
                     </div>
 
-                    {/* Customer name + service badge + scheduled date */}
-                    <div className="flex flex-col gap-1.5 min-w-[150px] shrink-0">
-                      <span className="font-semibold text-base text-[#F5F5F5] truncate">
-                        {appt.customerName}
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-[#71717A]">Price</span>
+                      <span className="text-base font-bold font-display text-[#F5F5F5]">
+                        {appt.price || 'Standard'}
                       </span>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${getBadgeStyles(
-                            appt.badgeColor
-                          )}`}
-                        >
-                          {appt.serviceName}
-                        </span>
-                        {isToday ? (
-                          <span className="text-[11px] font-semibold text-[#35B86B] bg-[#35B86B]/10 px-2 py-0.5 rounded-md border border-[#35B86B]/20">
-                            Today
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#A1A1AA] bg-[#101010] px-2 py-0.5 rounded-md border border-[#2C2C2C]">
-                            <CalendarDays className="w-3 h-3 text-[#E86A33]" />
-                            {appt.date}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Car icon + vehicle model + staff name */}
-                    <div className="flex items-center gap-2 text-[#A1A1AA] text-sm flex-1 min-w-0">
-                      <Car className="w-4 h-4 shrink-0 text-[#E86A33]" />
-                      <span className="truncate text-[#F5F5F5]">{appt.vehicle}</span>
                     </div>
                   </div>
 
-                  {/* Right: Actions cluster */}
-                  <div className="flex items-center gap-2.5 shrink-0 self-end sm:self-auto ml-auto sm:ml-0">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => handleMarkCompleted(appt)}
-                      className={`!py-2 !px-3.5 !text-sm !border-[#2C2C2C] transition-colors ${
-                        appt.completed
-                          ? '!text-[#35B86B] !border-[#35B86B]/50 bg-[#35B86B]/10 hover:!border-[#35B86B]'
-                          : '!text-[#F5F5F5] hover:!border-[#35B86B] hover:!text-[#35B86B]'
-                      }`}
-                    >
-                      {appt.completed ? (
-                        <span className="flex items-center gap-1.5 text-[#35B86B]">
-                          <Check className="w-3.5 h-3.5" />
-                          Completed
-                        </span>
-                      ) : (
-                        'Mark Completed'
+                  {/* Row 2: Customer info, Vehicle/Package, Schedule */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {/* Customer info */}
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-[11px] uppercase tracking-wider text-[#71717A] font-semibold">
+                        Customer & Contact
+                      </span>
+                      <span className="font-semibold text-sm text-[#F5F5F5]">
+                        {appt.customerName}
+                      </span>
+                      {appt.phone && (
+                        <a
+                          href={`tel:${appt.phone}`}
+                          className="flex items-center gap-1.5 text-xs text-[#A1A1AA] hover:text-[#35B86B] transition-colors"
+                        >
+                          <Phone className="w-3 h-3 text-[#71717A]" />
+                          <span>{appt.phone}</span>
+                        </a>
                       )}
-                    </Button>
+                      {appt.customerEmail && (
+                        <a
+                          href={`mailto:${appt.customerEmail}`}
+                          className="flex items-center gap-1.5 text-xs text-[#A1A1AA] hover:text-[#35B86B] transition-colors truncate"
+                        >
+                          <Mail className="w-3 h-3 text-[#71717A] shrink-0" />
+                          <span className="truncate">{appt.customerEmail}</span>
+                        </a>
+                      )}
+                    </div>
 
-                    <button
-                      type="button"
-                      onClick={() => setInfoModalAppt(appt)}
-                      className="p-2 text-[#71717A] hover:text-[#E86A33] transition-colors rounded-lg hover:bg-[#1F1F1F] cursor-pointer"
-                      title="View Appointment Details"
-                      aria-label="View Appointment Details"
-                    >
-                      <Info className="w-4 h-4" />
-                    </button>
+                    {/* Service & Vehicle */}
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-[11px] uppercase tracking-wider text-[#71717A] font-semibold">
+                        Service & Vehicle
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <Car className="w-3.5 h-3.5 text-[#E86A33] shrink-0" />
+                        <span className="text-sm font-medium text-[#F5F5F5]">
+                          {appt.vehicle}
+                        </span>
+                      </div>
+                      <span className="text-xs text-[#A1A1AA] pl-5.5">
+                        Package: {appt.serviceName}
+                      </span>
+                      {appt.location && (
+                        <div className="flex items-start gap-1.5 text-xs text-[#71717A] pl-5.5">
+                          <MapPin className="w-3.5 h-3.5 text-[#E86A33] shrink-0 mt-0.5" />
+                          <span className="truncate">{appt.location}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Scheduled Slot */}
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-[11px] uppercase tracking-wider text-[#71717A] font-semibold">
+                        Scheduled Slot
+                      </span>
+                      <div className="flex items-center gap-2 text-sm font-medium text-[#F5F5F5]">
+                        <Calendar className="w-3.5 h-3.5 text-[#35B86B]" />
+                        <span>{appt.date}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-[#A1A1AA] pl-5.5">
+                        <Clock className="w-3.5 h-3.5 text-[#35B86B]" />
+                        <span>{appt.time}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Customer notes preview if present */}
+                  {appt.notes && (
+                    <div className="p-3 rounded-xl bg-[#101010] border border-[#2C2C2C] text-xs text-[#A1A1AA] flex items-start gap-2">
+                      <FileText className="w-3.5 h-3.5 text-[#E86A33] shrink-0 mt-0.5" />
+                      <div>
+                        <span className="text-[#71717A] font-medium mr-1.5">Customer Notes:</span>
+                        {appt.notes}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Row 3: Action Buttons */}
+                  <div className="flex items-center justify-between pt-3 border-t border-[#2C2C2C]">
+                    <span className="text-xs text-[#71717A]">
+                      {appt.completed ? 'Wash service completed' : 'Ready for service'}
+                    </span>
+
+                    <div className="flex items-center gap-2.5">
+                      <Button
+                        type="button"
+                        variant={appt.completed ? 'outline' : 'primary'}
+                        onClick={() => handleMarkCompleted(appt)}
+                        className={`!py-2 !px-3.5 !text-xs font-semibold gap-1.5 ${
+                          appt.completed
+                            ? '!text-[#35B86B] !border-[#35B86B]/40 hover:!border-[#35B86B]'
+                            : '!bg-[#35B86B] hover:!bg-[#2da15d] !text-white'
+                        }`}
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        {appt.completed ? 'Completed' : 'Mark Completed'}
+                      </Button>
+
+                      <button
+                        type="button"
+                        onClick={() => setInfoModalAppt(appt)}
+                        className="p-2 text-[#71717A] hover:text-[#E86A33] transition-colors rounded-lg hover:bg-[#1F1F1F] cursor-pointer"
+                        title="View Full Booking Details"
+                        aria-label="View Full Booking Details"
+                      >
+                        <Info className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -381,6 +439,18 @@ export default function StaffAppointments() {
 
             <div className="space-y-3.5 text-sm">
               <div className="flex justify-between py-1.5 border-b border-[#2C2C2C]">
+                <span className="text-[#A1A1AA]">Appointment ID</span>
+                <span className="font-mono text-xs font-bold text-[#F5F5F5] bg-[#101010] px-2 py-0.5 rounded border border-[#2C2C2C]">
+                  #{infoModalAppt.id}
+                </span>
+              </div>
+              <div className="flex justify-between py-1.5 border-b border-[#2C2C2C]">
+                <span className="text-[#A1A1AA]">Status</span>
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-[#35B86B]/15 text-[#35B86B] border border-[#35B86B]/30">
+                  {infoModalAppt.status}
+                </span>
+              </div>
+              <div className="flex justify-between py-1.5 border-b border-[#2C2C2C]">
                 <span className="text-[#A1A1AA]">Customer</span>
                 <span className="text-[#F5F5F5] font-medium">
                   {infoModalAppt.customerName}
@@ -393,11 +463,25 @@ export default function StaffAppointments() {
                 </span>
               </div>
               <div className="flex justify-between py-1.5 border-b border-[#2C2C2C]">
+                <span className="text-[#A1A1AA]">Contact Email</span>
+                <span className="text-[#F5F5F5] font-medium truncate max-w-[200px]">
+                  {infoModalAppt.customerEmail || 'N/A'}
+                </span>
+              </div>
+              <div className="flex justify-between py-1.5 border-b border-[#2C2C2C]">
                 <span className="text-[#A1A1AA]">Scheduled Time</span>
                 <span className="text-[#F5F5F5] font-medium">
                   {infoModalAppt.date} at {infoModalAppt.time}
                 </span>
               </div>
+              {infoModalAppt.serviceType && (
+                <div className="flex justify-between py-1.5 border-b border-[#2C2C2C]">
+                  <span className="text-[#A1A1AA]">Service Type</span>
+                  <span className="text-[#F5F5F5] font-medium">
+                    {infoModalAppt.serviceType}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between py-1.5 border-b border-[#2C2C2C]">
                 <span className="text-[#A1A1AA]">Vehicle</span>
                 <span className="text-[#F5F5F5] font-medium">
@@ -421,19 +505,11 @@ export default function StaffAppointments() {
                 </span>
               </div>
               <div className="flex justify-between py-1.5 border-b border-[#2C2C2C]">
-                <span className="text-[#A1A1AA]">Assigned Staff</span>
-                <span className="text-[#F5F5F5] font-medium">
-                  {infoModalAppt.staffName}
+                <span className="text-[#A1A1AA]">Price</span>
+                <span className="text-[#E86A33] font-bold">
+                  {infoModalAppt.price || 'Standard'}
                 </span>
               </div>
-              {infoModalAppt.price && (
-                <div className="flex justify-between py-1.5 border-b border-[#2C2C2C]">
-                  <span className="text-[#A1A1AA]">Price</span>
-                  <span className="text-[#E86A33] font-bold">
-                    {infoModalAppt.price}
-                  </span>
-                </div>
-              )}
               {infoModalAppt.notes && (
                 <div className="bg-[#101010] border border-[#2C2C2C] rounded-lg p-3 mt-2">
                   <span className="text-xs text-[#71717A] block mb-1">Notes:</span>
@@ -449,7 +525,7 @@ export default function StaffAppointments() {
                 type="button"
                 variant="outline"
                 onClick={() => setInfoModalAppt(null)}
-                className="!py-2 !px-4 !text-sm !border-[#2C2C2C] !text-[#F5F5F5] hover:!border-[#E86A33] hover:!text-[#E86A33]"
+                className="!py-2 !px-4 !text-xs !border-[#2C2C2C] !text-[#F5F5F5]"
               >
                 Close
               </Button>
