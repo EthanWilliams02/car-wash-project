@@ -1,5 +1,5 @@
 import { doc, setDoc, deleteDoc, collection, onSnapshot } from 'firebase/firestore';
-import { db } from './firebase';
+import { db } from './firebase.js';
 
 export interface CustomerVehicle {
   id: string;

@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { getAuth, connectAuthEmulator } from 'firebase/auth';
+import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore';
 
 const env: Record<string, string | undefined> =
   (typeof import.meta !== 'undefined' && (import.meta as any).env) ||
@@ -19,3 +19,23 @@ const firebaseConfig = {
 export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+
+// Connect to emulator if configured via environment variable
+const isEmulator =
+  env.VITE_USE_FIREBASE_EMULATOR === 'true' ||
+  Boolean(env.FIREBASE_AUTH_EMULATOR_HOST) ||
+  Boolean(env.FIRESTORE_EMULATOR_HOST);
+
+if (isEmulator) {
+  try {
+    const rawAuthHost = env.FIREBASE_AUTH_EMULATOR_HOST || env.VITE_FIREBASE_AUTH_EMULATOR_HOST || '127.0.0.1:9099';
+    const authUrl = rawAuthHost.startsWith('http') ? rawAuthHost : `http://${rawAuthHost}`;
+    connectAuthEmulator(auth, authUrl, { disableWarnings: true });
+
+    const rawFsHost = env.FIRESTORE_EMULATOR_HOST || env.VITE_FIRESTORE_EMULATOR_HOST || '127.0.0.1:8080';
+    const [fsHost, fsPort] = rawFsHost.split(':');
+    connectFirestoreEmulator(db, fsHost, parseInt(fsPort || '8080', 10));
+  } catch (e) {
+    console.warn('[Firebase] Emulator connection skipped or already initialized:', e);
+  }
+}

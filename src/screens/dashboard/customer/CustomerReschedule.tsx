@@ -174,6 +174,14 @@ export default function CustomerReschedule() {
           vehicle,
           notes,
           price: formattedTotal,
+          previousSchedule: {
+            date: appointment.date,
+            time: appointment.time,
+          },
+          rescheduledAt: Date.now(),
+          rescheduledBy: currentUser?.uid || '',
+          rescheduledByName: currentUser?.displayName || 'Customer',
+          rescheduledByRole: 'customer',
         },
         currentUser?.uid
       );
