@@ -56,6 +56,8 @@ export interface StoredAppointment {
   customerName?: string;
   customerEmail?: string;
   customerPhone?: string;
+  phone?: string;
+  email?: string;
   updatedAt?: any;
 }
 
@@ -329,7 +331,7 @@ export function getDynamicAppointmentStatus(
 
     return {
       status: 'Confirmed',
-      statusColor: 'burnt-orange',
+      statusColor: 'reward-green',
       isLocked: !canReschedule,
       isMissed: false,
       canReschedule,
@@ -374,7 +376,7 @@ export function getDynamicAppointmentStatus(
   // 8. Default fallback: Confirmed
   return {
     status: 'Confirmed',
-    statusColor: 'burnt-orange',
+    statusColor: 'reward-green',
     isLocked: !canReschedule,
     isMissed: false,
     canReschedule,
@@ -529,7 +531,7 @@ export async function assignStaffToAppointment(
       staffName: staffName,
       staffStatus: 'Assigned',
       status: 'Confirmed',
-      statusColor: 'burnt-orange',
+      statusColor: 'reward-green',
       confirmed: true,
       updatedAt: serverTimestamp(),
     },
@@ -546,7 +548,7 @@ export async function assignStaffToAppointment(
             staffName: staffName,
             staffStatus: 'Assigned',
             status: 'Confirmed',
-            statusColor: 'burnt-orange',
+            statusColor: 'reward-green',
             confirmed: true,
           }
         : appt
@@ -593,7 +595,8 @@ export function subscribeToStaffMembers(
       const staffList: { uid: string; name: string; email?: string }[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
-        const name = data.displayName || data.fullName || data.name || data.email || 'Staff Member';
+        const rawName = data.displayName || data.fullName || data.name;
+        const name = (typeof rawName === 'string' && rawName.trim()) ? rawName.trim() : 'Staff Member';
         staffList.push({
           uid: docSnap.id,
           name,
@@ -605,6 +608,52 @@ export function subscribeToStaffMembers(
     },
     (err) => {
       console.warn('Failed to listen to staff members in Firestore:', err);
+      if (onError) onError(err);
+    }
+  );
+}
+
+/**
+ * Subscribes in real time to all appointments assigned to the logged-in staff member.
+ * Narrowly scoped to where assignedStaffUid == staffUid.
+ * Unassigned staff will receive an empty list and are blocked by Firestore security rules from reading other appointments.
+ */
+export function subscribeToStaffAppointments(
+  staffUid: string,
+  callback: (appointments: (StoredAppointment & { customerUid: string })[]) => void,
+  onError?: (err: any) => void
+): () => void {
+  if (!staffUid) {
+    callback([]);
+    return () => {};
+  }
+
+  const apptsQuery = query(
+    collectionGroup(db, 'appointments'),
+    where('assignedStaffUid', '==', staffUid)
+  );
+
+  return onSnapshot(
+    apptsQuery,
+    (snapshot) => {
+      const list: (StoredAppointment & { customerUid: string })[] = [];
+
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as StoredAppointment;
+        const customerUid = data.customerUid || docSnap.ref.parent.parent?.id || '';
+        list.push({
+          ...data,
+          id: docSnap.id,
+          customerUid,
+        });
+      });
+
+      // Sort by createdAt descending (newest first)
+      list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      callback(list);
+    },
+    (err) => {
+      console.error('Failed to listen to staff assigned appointments:', err);
       if (onError) onError(err);
     }
   );
@@ -728,10 +777,13 @@ export async function confirmAppointmentByOwner(
   staff: { uid: string; name: string },
   adminUser: { uid: string; name?: string }
 ): Promise<void> {
+  if (!adminUser || !adminUser.uid) {
+    throw new Error('Admin authentication is required to confirm appointments.');
+  }
   if (!staff || !staff.uid || !staff.name?.trim()) {
     throw new Error('A staff member must be selected before confirming the booking.');
   }
-  if (!customerUid || !appointmentId) {
+  if (!customerUid?.trim() || !appointmentId?.trim()) {
     throw new Error('Missing required customer or appointment identifier.');
   }
 
@@ -755,24 +807,41 @@ export async function confirmAppointmentByOwner(
   const confirmedByName = adminUser.name || 'Owner';
   const assignedStaffName = staff.name.trim();
 
+  // Ensure customer profile details are persisted on the appointment document for assigned staff
+  const customerName = currentData.customerName || '';
+  const customerEmail = currentData.customerEmail || '';
+  const customerPhone = currentData.customerPhone || currentData.phone || '';
+
+  const updatePayload: Record<string, any> = {
+    assignedStaffUid: staff.uid,
+    staffName: assignedStaffName,
+    staffStatus: 'Assigned',
+    confirmed: true,
+    status: 'Confirmed',
+    statusColor: 'reward-green',
+    confirmedAt,
+    confirmedBy,
+    confirmedByName,
+    confirmedByRole: 'admin',
+    updatedAt: serverTimestamp(),
+  };
+
+  if (!customerName || !customerEmail || !customerPhone) {
+    try {
+      const uSnap = await getDoc(doc(db, 'users', customerUid));
+      if (uSnap.exists()) {
+        const uData = uSnap.data();
+        if (!customerName) updatePayload.customerName = uData.fullName || uData.displayName || 'Customer';
+        if (!customerEmail) updatePayload.customerEmail = uData.email || '';
+        if (!customerPhone) updatePayload.customerPhone = uData.phoneNumber || uData.phone || '';
+      }
+    } catch {
+      // Ignore user doc read fallback
+    }
+  }
+
   // Atomic update to existing appointment document
-  await setDoc(
-    apptRef,
-    {
-      assignedStaffUid: staff.uid,
-      staffName: assignedStaffName,
-      staffStatus: 'Assigned',
-      confirmed: true,
-      status: 'Confirmed',
-      statusColor: 'burnt-orange',
-      confirmedAt,
-      confirmedBy,
-      confirmedByName,
-      confirmedByRole: 'admin',
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true }
-  );
+  await setDoc(apptRef, updatePayload, { merge: true });
 
   // Update local cache safely for immediate client responsiveness
   try {
@@ -782,12 +851,13 @@ export async function confirmAppointmentByOwner(
         appt.id === appointmentId
           ? {
               ...appt,
+              ...updatePayload,
               assignedStaffUid: staff.uid,
               staffName: assignedStaffName,
               staffStatus: 'Assigned',
               confirmed: true,
               status: 'Confirmed',
-              statusColor: 'burnt-orange',
+              statusColor: 'reward-green',
               confirmedAt,
               confirmedBy,
               confirmedByName,
@@ -952,7 +1022,7 @@ export async function adminRescheduleAppointment(
       time: newTime,
       confirmed: wasConfirmed,
       status: wasConfirmed ? 'Confirmed' : 'Awaiting Confirmation',
-      statusColor: wasConfirmed ? 'burnt-orange' : 'amber',
+      statusColor: wasConfirmed ? 'reward-green' : 'amber',
       previousSchedule: {
         date: oldDate,
         time: oldTime,

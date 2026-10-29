@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -54,6 +55,9 @@ export default function AdminAppointments() {
 
   // Staff members populated from real Firestore staff accounts
   const [staffList, setStaffList] = useState<{ uid: string; name: string; email?: string }[]>([]);
+  const [isStaffLoading, setIsStaffLoading] = useState(true);
+  const [staffError, setStaffError] = useState<string | null>(null);
+
   // Selected staff member per appointment: appointmentId -> staffUid
   const [selectedStaffMap, setSelectedStaffMap] = useState<Record<string, string>>({});
 
@@ -61,12 +65,18 @@ export default function AdminAppointments() {
 
   // Subscribe to real-time staff members list
   useEffect(() => {
+    setIsStaffLoading(true);
+    setStaffError(null);
     const unsubStaff = subscribeToStaffMembers(
       (list) => {
         setStaffList(list);
+        setIsStaffLoading(false);
+        setStaffError(null);
       },
       (err) => {
         console.warn('Failed to load real staff members:', err);
+        setStaffError(err?.message || 'Failed to load staff list');
+        setIsStaffLoading(false);
       }
     );
     return () => unsubStaff();
@@ -198,8 +208,26 @@ export default function AdminAppointments() {
   }, [appointments]);
 
   // Handle owner staff assignment & confirmation action
-  const handleAssignAndConfirm = async (appt: StoredAppointment & { customerUid: string }) => {
-    if (!currentUser) return;
+  const handleConfirm = async (appt: StoredAppointment & { customerUid: string }) => {
+    if (!currentUser || !currentUser.uid) {
+      showToast('You must be signed in as an administrator to confirm appointments.', 'error');
+      return;
+    }
+
+    if (!appt.customerUid?.trim() || !appt.id?.trim()) {
+      showToast('Missing customer or appointment identifier.', 'error');
+      return;
+    }
+
+    if (appt.status === 'Cancelled') {
+      showToast('Cannot confirm a cancelled appointment.', 'error');
+      return;
+    }
+
+    if (appt.completed) {
+      showToast('Cannot confirm an already completed appointment.', 'error');
+      return;
+    }
 
     const selectedStaffUid = selectedStaffMap[appt.id];
     if (!selectedStaffUid) {
@@ -207,14 +235,13 @@ export default function AdminAppointments() {
       return;
     }
 
-    const staffMember = staffList.find((s) => s.uid === selectedStaffUid);
-    if (!staffMember) {
-      showToast('The selected staff member could not be found. Please select an active staff member.', 'error');
+    const selectedStaff = staffList.find((s) => s.uid === selectedStaffUid);
+    if (!selectedStaff || !selectedStaff.uid || !selectedStaff.name?.trim()) {
+      showToast('Selected staff member is invalid or not found. Please select an active staff member.', 'error');
       return;
     }
 
     if (confirmingId === appt.id) return; // Prevent duplicate submissions
-
     setConfirmingId(appt.id);
 
     try {
@@ -222,20 +249,17 @@ export default function AdminAppointments() {
         appt.customerUid,
         appt.id,
         {
-          uid: staffMember.uid,
-          name: staffMember.name,
+          uid: selectedStaff.uid,
+          name: selectedStaff.name,
         },
         {
           uid: currentUser.uid,
           name: currentUser.displayName || 'Owner',
         }
       );
-      showToast(
-        `Appointment #${appt.id} confirmed and assigned to ${staffMember.name}. Both customer and staff have been notified.`,
-        'success'
-      );
+      showToast('Appointment confirmed successfully', 'success');
     } catch (err: any) {
-      console.error('Failed to confirm and assign appointment:', err);
+      console.error('Failed to confirm appointment:', err);
       showToast(err?.message || 'Failed to confirm appointment. Please try again.', 'error');
     } finally {
       setConfirmingId(null);
@@ -282,7 +306,7 @@ export default function AdminAppointments() {
     }
 
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-[#E86A33]/15 text-[#E86A33] border border-[#E86A33]/30">
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-[#35B86B]/15 text-[#35B86B] border border-[#35B86B]/30">
         <CheckCircle2 className="w-3.5 h-3.5" />
         Confirmed
       </span>
@@ -698,6 +722,7 @@ export default function AdminAppointments() {
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="relative">
                           <select
+                            id={`staff-select-${appt.id}`}
                             value={selectedStaffMap[appt.id] || ''}
                             onChange={(e) =>
                               setSelectedStaffMap((prev) => ({
@@ -705,18 +730,22 @@ export default function AdminAppointments() {
                                 [appt.id]: e.target.value,
                               }))
                             }
-                            disabled={isSaving}
+                            disabled={isSaving || isStaffLoading || staffList.length === 0}
                             aria-label="Assign staff member"
                             className="bg-[#101010] border border-[#2C2C2C] text-[#F5F5F5] text-xs rounded-xl pl-3 pr-8 py-2 focus:outline-none focus:border-[#E86A33] focus:ring-1 focus:ring-[#E86A33] transition-all cursor-pointer disabled:opacity-50 appearance-none font-medium max-w-[210px] truncate"
                           >
                             <option value="">
-                              {staffList.length === 0
-                                ? 'No registered staff found'
-                                : 'Select Staff Member... *'}
+                              {isStaffLoading
+                                ? 'Loading staff members...'
+                                : staffError
+                                ? 'Error loading staff'
+                                : staffList.length === 0
+                                ? 'No staff members found'
+                                : 'Select staff member... *'}
                             </option>
                             {staffList.map((staff) => (
-                              <option key={staff.uid} value={staff.uid}>
-                                {staff.name} {staff.email ? `(${staff.email})` : ''}
+                              <option key={staff.uid} value={staff.uid} className="bg-[#171717] text-[#F5F5F5]">
+                                {staff.name}
                               </option>
                             ))}
                           </select>
@@ -728,8 +757,8 @@ export default function AdminAppointments() {
                         <Button
                           variant="primary"
                           isLoading={isSaving}
-                          disabled={!selectedStaffMap[appt.id] || isSaving}
-                          onClick={() => handleAssignAndConfirm(appt)}
+                          disabled={!selectedStaffMap[appt.id] || isSaving || isStaffLoading}
+                          onClick={() => handleConfirm(appt)}
                           className="!py-2 !px-3.5 !text-xs gap-1.5 font-semibold shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                           title={
                             !selectedStaffMap[appt.id]

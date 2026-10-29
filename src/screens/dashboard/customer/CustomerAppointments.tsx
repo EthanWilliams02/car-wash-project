@@ -225,6 +225,7 @@ export default function CustomerAppointments() {
                   <AppointmentCard
                     key={appt.id}
                     id={appt.id}
+                    status={appt.status}
                     date={appt.date}
                     time={appt.time}
                     serviceType={appt.serviceType}
@@ -296,6 +297,7 @@ export default function CustomerAppointments() {
                   <AppointmentCard
                     key={appt.id}
                     id={appt.id}
+                    status={appt.status}
                     date={appt.date}
                     time={appt.time}
                     serviceType={appt.serviceType}
@@ -359,6 +361,7 @@ export default function CustomerAppointments() {
 // Helper component for the Card to keep code clean
 function AppointmentCard({ 
   id: _id,
+  status: rawStatus,
   date, 
   time, 
   serviceType,
@@ -380,13 +383,18 @@ function AppointmentCard({
   onReschedule, 
   onCancel 
 }: any) {
+  // Pass the stored status string so getDynamicAppointmentStatus can honour
+  // explicit stored values like 'Awaiting Confirmation' and 'Confirmed' without
+  // relying solely on the boolean `confirmed` flag (which may be undefined on
+  // newly created bookings that haven't had confirmed explicitly set).
+  const initialStatus = isCancelled ? 'Cancelled' : (rawStatus || undefined);
   const dynamic = getDynamicAppointmentStatus(
     date,
     time,
     propIsMissed,
     completed,
     hasMembership,
-    isCancelled ? 'Cancelled' : undefined,
+    initialStatus,
     confirmed,
     staffStatus
   );
