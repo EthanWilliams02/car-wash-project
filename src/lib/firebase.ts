@@ -4,7 +4,7 @@ import { getFirestore } from 'firebase/firestore';
 
 const env: Record<string, string | undefined> =
   (typeof import.meta !== 'undefined' && (import.meta as any).env) ||
-  (typeof process !== 'undefined' ? (process as any).env : {}) ||
+  (typeof globalThis !== 'undefined' && (globalThis as any).process ? (globalThis as any).process.env : {}) ||
   {};
 
 const firebaseConfig = {

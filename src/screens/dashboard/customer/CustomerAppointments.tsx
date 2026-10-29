@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { doc, collection, query, orderBy, onSnapshot } from 'firebase/firestore';
+import { doc, collection, onSnapshot } from 'firebase/firestore';
 import { useAuth } from '../../../contexts/AuthContext';
 import { db } from '../../../lib/firebase';
 import { getStoredAppointments, getDynamicAppointmentStatus, getAppointmentsStorageKey, type StoredAppointment } from '../../../lib/appointments';
@@ -110,20 +110,51 @@ export default function CustomerAppointments() {
     }
 
     const apptsRef = collection(db, 'users', currentUser.uid, 'appointments');
-    const q = query(apptsRef, orderBy('createdAt', 'desc'));
-    const unsub = onSnapshot(q, (snapshot) => {
-      const list: StoredAppointment[] = [];
-      snapshot.forEach((docSnap) => {
-        list.push({ id: docSnap.id, ...docSnap.data() } as StoredAppointment);
-      });
-      setStoredAppointments(list);
-      localStorage.setItem(getAppointmentsStorageKey(currentUser.uid), JSON.stringify(list));
-    }, (err) => {
-      console.error('Failed to listen to user appointments in Firestore', err);
-      setStoredAppointments(getStoredAppointments(currentUser.uid));
-    });
+    const unsub = onSnapshot(
+      apptsRef,
+      (snapshot) => {
+        const list: StoredAppointment[] = [];
+        snapshot.forEach((docSnap) => {
+          list.push({ id: docSnap.id, ...docSnap.data() } as StoredAppointment);
+        });
+        // Sort newest first by createdAt safely in memory
+        list.sort((a, b) => {
+          const tA = typeof a.createdAt === 'number' ? a.createdAt : (a.createdAt as any)?.toMillis ? (a.createdAt as any).toMillis() : 0;
+          const tB = typeof b.createdAt === 'number' ? b.createdAt : (b.createdAt as any)?.toMillis ? (b.createdAt as any).toMillis() : 0;
+          return tB - tA;
+        });
+        setStoredAppointments(list);
+        try {
+          localStorage.setItem(getAppointmentsStorageKey(currentUser.uid), JSON.stringify(list));
+        } catch {}
+      },
+      (err) => {
+        console.error('Failed to listen to user appointments in Firestore', err);
+        const fallback = getStoredAppointments(currentUser.uid);
+        if (fallback.length > 0) {
+          setStoredAppointments(fallback);
+        }
+      }
+    );
 
     return () => unsub();
+  }, [currentUser?.uid]);
+
+  // Synchronize appointments across browser tabs/sessions
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === getAppointmentsStorageKey(currentUser.uid) && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            setStoredAppointments(parsed);
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
   }, [currentUser?.uid]);
 
   // Listen to user profile membership status

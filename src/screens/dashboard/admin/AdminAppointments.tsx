@@ -27,6 +27,7 @@ import {
   confirmAppointmentByOwner,
   getDynamicAppointmentStatus,
   type StoredAppointment,
+  type StaffMember,
 } from '../../../lib/appointments';
 import { Button } from '../../../components/ui/Button';
 
@@ -53,8 +54,8 @@ export default function AdminAppointments() {
   // Confirmation action in-progress tracker: appointmentId -> boolean
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
-  // Staff members populated from real Firestore staff accounts
-  const [staffList, setStaffList] = useState<{ uid: string; name: string; email?: string }[]>([]);
+  // Staff members populated from authoritative pre_registered_staff records
+  const [staffList, setStaffList] = useState<StaffMember[]>([]);
   const [isStaffLoading, setIsStaffLoading] = useState(true);
   const [staffError, setStaffError] = useState<string | null>(null);
 
@@ -75,8 +76,10 @@ export default function AdminAppointments() {
       },
       (err) => {
         console.warn('Failed to load real staff members:', err);
-        setStaffError(err?.message || 'Failed to load staff list');
+        const errMsg = err?.message || 'Failed to load staff list';
+        setStaffError(errMsg);
         setIsStaffLoading(false);
+        showToast(`Failed to load staff accounts: ${errMsg}`, 'error');
       }
     );
     return () => unsubStaff();
@@ -235,9 +238,9 @@ export default function AdminAppointments() {
       return;
     }
 
-    const selectedStaff = staffList.find((s) => s.uid === selectedStaffUid);
+    const selectedStaff = staffList.find((s) => s.uid === selectedStaffUid && s.isActivated);
     if (!selectedStaff || !selectedStaff.uid || !selectedStaff.name?.trim()) {
-      showToast('Selected staff member is invalid or not found. Please select an active staff member.', 'error');
+      showToast('Selected staff member is invalid or not yet activated. Please select an active staff member.', 'error');
       return;
     }
 
@@ -738,14 +741,19 @@ export default function AdminAppointments() {
                               {isStaffLoading
                                 ? 'Loading staff members...'
                                 : staffError
-                                ? 'Error loading staff'
+                                ? `Error: ${staffError}`
                                 : staffList.length === 0
-                                ? 'No staff members found'
+                                ? 'No registered staff found'
                                 : 'Select staff member... *'}
                             </option>
                             {staffList.map((staff) => (
-                              <option key={staff.uid} value={staff.uid} className="bg-[#171717] text-[#F5F5F5]">
-                                {staff.name}
+                              <option
+                                key={staff.preRegDocId || staff.employeeId || staff.email || staff.uid}
+                                value={staff.isActivated ? staff.uid : ''}
+                                disabled={!staff.isActivated}
+                                className={staff.isActivated ? "bg-[#171717] text-[#F5F5F5]" : "bg-[#171717] text-[#71717A] italic"}
+                              >
+                                {staff.isActivated ? staff.name : `${staff.name} (Pending Activation)`}
                               </option>
                             ))}
                           </select>
