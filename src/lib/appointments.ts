@@ -557,22 +557,135 @@ export async function assignStaffToAppointment(
   }
 }
 
-export async function getAllStaffMembers(): Promise<{ uid: string; name: string; email?: string }[]> {
+export interface StaffMember {
+  uid: string; // Linked account's Firebase Auth UID from users/{uid} (empty if pending activation)
+  name: string; // Registered full name
+  email?: string;
+  employeeId?: string;
+  isActivated: boolean;
+  preRegDocId: string;
+}
+
+const KNOWN_STAFF_NAMES: Record<string, string> = {
+  emp1001: 'Redah Gamieldien',
+  emp1002: 'Ethan Williams',
+  emp1003: 'Qaasim Isaacs',
+  emp1004: 'Angelo Adams',
+  emp1005: 'Rameez Karriem',
+  emp123: 'Lyle Solomons',
+  emp009: 'Satoru Gojo',
+  'premierromeo57@gmail.com': 'Redah Gamieldien',
+  'ethan.williams041202@gmail.com': 'Ethan Williams',
+  'qisaacs001@gmail.com': 'Qaasim Isaacs',
+  'angeloyorks23@gmail.com': 'Angelo Adams',
+  'karriemrameez5@gmail.com': 'Rameez Karriem',
+  'lylesolomons115@gmail.com': 'Lyle Solomons',
+  'zatorugojo67@gmail.com': 'Satoru Gojo',
+};
+
+export function resolveStaffFullName(userData?: any, preRegData?: any): string {
+  const direct =
+    userData?.fullName ||
+    userData?.displayName ||
+    userData?.name ||
+    preRegData?.fullName ||
+    preRegData?.displayName ||
+    preRegData?.name;
+  if (typeof direct === 'string' && direct.trim() && !direct.includes('@') && direct.trim().toLowerCase() !== 'staff member') {
+    return direct.trim();
+  }
+
+  const parts = [userData?.firstName || preRegData?.firstName, userData?.lastName || preRegData?.lastName]
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+  if (parts) return parts;
+
+  const empKey = (userData?.employeeId || preRegData?.employeeId || '').toString().toLowerCase().trim();
+  if (empKey && KNOWN_STAFF_NAMES[empKey]) {
+    return KNOWN_STAFF_NAMES[empKey];
+  }
+
+  const emailKey = (userData?.email || preRegData?.email || '').toString().toLowerCase().trim();
+  if (emailKey && KNOWN_STAFF_NAMES[emailKey]) {
+    return KNOWN_STAFF_NAMES[emailKey];
+  }
+
+  if (emailKey && emailKey.includes('@')) {
+    const prefix = emailKey.split('@')[0].replace(/[0-9_]/g, ' ').replace(/\./g, ' ').trim();
+    if (prefix) {
+      return prefix
+        .split(/\s+/)
+        .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ');
+    }
+  }
+
+  return 'Registered Staff';
+}
+
+/**
+ * Fetches all pre-registered staff members and matches them to activated Firestore user accounts.
+ * pre_registered_staff is the authoritative source. Excludes accounts without a matching pre-registration record.
+ */
+export async function getAllStaffMembers(): Promise<StaffMember[]> {
   try {
-    const usersRef = collection(db, 'users');
-    const q = query(usersRef, where('role', '==', 'staff'));
-    const snapshot = await getDocs(q);
-    const staffList: { uid: string; name: string; email?: string }[] = [];
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data();
-      const name = data.displayName || data.fullName || data.name || data.email || 'Staff Member';
+    const preRegSnap = await getDocs(collection(db, 'pre_registered_staff'));
+    const preList: { id: string; [key: string]: any }[] = [];
+    preRegSnap.forEach((d) => preList.push({ id: d.id, ...d.data() }));
+
+    // Fetch activated staff users
+    const usersSnap = await getDocs(query(collection(db, 'users'), where('role', '==', 'staff')));
+    const userDocs: { id: string; [key: string]: any }[] = [];
+    usersSnap.forEach((d) => userDocs.push({ id: d.id, ...d.data() }));
+
+    const activatedByEmpId = new Map<string, { id: string; [key: string]: any }>();
+    const activatedByEmail = new Map<string, { id: string; [key: string]: any }>();
+
+    for (const u of userDocs) {
+      if (u.employeeId) {
+        activatedByEmpId.set(u.employeeId.toString().trim().toUpperCase(), u);
+      }
+      if (u.email) {
+        activatedByEmail.set(u.email.toString().trim().toLowerCase(), u);
+      }
+    }
+
+    const staffList: StaffMember[] = [];
+    const seenIdentities = new Set<string>();
+
+    for (const pre of preList) {
+      const empId = pre.employeeId ? pre.employeeId.toString().trim() : '';
+      const email = pre.email ? pre.email.toString().trim().toLowerCase() : '';
+
+      // Deduplicate by staff identity, NOT by name
+      const identityKey = (empId || email || pre.id).toLowerCase();
+      if (seenIdentities.has(identityKey)) continue;
+      seenIdentities.add(identityKey);
+
+      const matchedUser =
+        (empId && activatedByEmpId.get(empId.toUpperCase())) ||
+        (email && activatedByEmail.get(email));
+
+      const isActivated = Boolean(matchedUser && (matchedUser.uid || matchedUser.id));
+      const authUid = isActivated ? (matchedUser.uid || matchedUser.id) : '';
+      const name = resolveStaffFullName(matchedUser, pre);
+
       staffList.push({
-        uid: docSnap.id,
+        uid: authUid,
         name,
-        email: data.email,
+        email: email || matchedUser?.email,
+        employeeId: empId || matchedUser?.employeeId,
+        isActivated,
+        preRegDocId: pre.id,
       });
+    }
+
+    staffList.sort((a, b) => {
+      if (a.isActivated !== b.isActivated) return a.isActivated ? -1 : 1;
+      return a.name.localeCompare(b.name);
     });
-    staffList.sort((a, b) => a.name.localeCompare(b.name));
+
     return staffList;
   } catch (e) {
     console.error('Failed to fetch staff members:', e);
@@ -581,36 +694,110 @@ export async function getAllStaffMembers(): Promise<{ uid: string; name: string;
 }
 
 /**
- * Subscribes to real-time updates for all registered staff members in Firestore.
+ * Subscribes to real-time updates for eligible staff members.
+ * Uses Firebase's pre_registered_staff collection as the authoritative list.
+ * Only pre-registered staff are displayed. Unregistered accounts with role: 'staff' are excluded.
+ * Matches pre-registration records to activated accounts by employeeId / email to get their Auth UID.
+ * Unactivated records are marked with isActivated: false so they can be shown as Pending Activation.
  */
 export function subscribeToStaffMembers(
-  callback: (staff: { uid: string; name: string; email?: string }[]) => void,
+  callback: (staff: StaffMember[]) => void,
   onError?: (err: any) => void
 ): () => void {
+  const preRegRef = collection(db, 'pre_registered_staff');
   const usersRef = collection(db, 'users');
-  const q = query(usersRef, where('role', '==', 'staff'));
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const staffList: { uid: string; name: string; email?: string }[] = [];
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        const rawName = data.displayName || data.fullName || data.name;
-        const name = (typeof rawName === 'string' && rawName.trim()) ? rawName.trim() : 'Staff Member';
-        staffList.push({
-          uid: docSnap.id,
-          name,
-          email: data.email,
-        });
+
+  let preRegDocs: { id: string; [key: string]: any }[] = [];
+  let userDocs: { id: string; [key: string]: any }[] = [];
+  let hasPreRegLoaded = false;
+
+  const mergeAndEmit = () => {
+    if (!hasPreRegLoaded) return;
+
+    // Index activated staff by employeeId and email
+    const activatedByEmpId = new Map<string, { id: string; [key: string]: any }>();
+    const activatedByEmail = new Map<string, { id: string; [key: string]: any }>();
+
+    for (const u of userDocs) {
+      if (u.role === 'staff' || u.employeeId) {
+        if (u.employeeId) {
+          activatedByEmpId.set(u.employeeId.toString().trim().toUpperCase(), u);
+        }
+        if (u.email) {
+          activatedByEmail.set(u.email.toString().trim().toLowerCase(), u);
+        }
+      }
+    }
+
+    const staffList: StaffMember[] = [];
+    const seenIdentities = new Set<string>();
+
+    for (const pre of preRegDocs) {
+      const empId = pre.employeeId ? pre.employeeId.toString().trim() : '';
+      const email = pre.email ? pre.email.toString().trim().toLowerCase() : '';
+
+      // Deduplicate by staff identity, NOT by name
+      const identityKey = (empId || email || pre.id).toLowerCase();
+      if (seenIdentities.has(identityKey)) continue;
+      seenIdentities.add(identityKey);
+
+      // Match each pre-registration record to its activated staff account
+      const matchedUser =
+        (empId && activatedByEmpId.get(empId.toUpperCase())) ||
+        (email && activatedByEmail.get(email));
+
+      const isActivated = Boolean(matchedUser && (matchedUser.uid || matchedUser.id));
+      const authUid = isActivated ? (matchedUser.uid || matchedUser.id) : '';
+      const name = resolveStaffFullName(matchedUser, pre);
+
+      staffList.push({
+        uid: authUid,
+        name,
+        email: email || matchedUser?.email,
+        employeeId: empId || matchedUser?.employeeId,
+        isActivated,
+        preRegDocId: pre.id,
       });
-      staffList.sort((a, b) => a.name.localeCompare(b.name));
-      callback(staffList);
+    }
+
+    // Sort: activated first, then pending activation, alphabetically by name
+    staffList.sort((a, b) => {
+      if (a.isActivated !== b.isActivated) return a.isActivated ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    callback(staffList);
+  };
+
+  const unsubPreReg = onSnapshot(
+    preRegRef,
+    (snapshot) => {
+      preRegDocs = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+      hasPreRegLoaded = true;
+      mergeAndEmit();
     },
     (err) => {
-      console.warn('Failed to listen to staff members in Firestore:', err);
+      console.warn('Failed to listen to pre_registered_staff:', err);
       if (onError) onError(err);
     }
   );
+
+  const unsubUsers = onSnapshot(
+    query(usersRef, where('role', '==', 'staff')),
+    (snapshot) => {
+      userDocs = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+      mergeAndEmit();
+    },
+    (err) => {
+      console.warn('Failed to listen to users for staff mapping:', err);
+      mergeAndEmit();
+    }
+  );
+
+  return () => {
+    unsubPreReg();
+    unsubUsers();
+  };
 }
 
 /**

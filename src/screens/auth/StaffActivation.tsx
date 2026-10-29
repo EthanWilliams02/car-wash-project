@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { auth, db } from '../../lib/firebase';
-import { createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
+import { createUserWithEmailAndPassword, sendEmailVerification, updateProfile } from 'firebase/auth';
 import { collection, query, where, getDocs, setDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { Mail, Lock, Eye, EyeOff, Hash, Info, ArrowLeft, Key } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
@@ -52,11 +52,28 @@ export default function StaffActivation() {
         throw new Error("Could not find a pre-registered employee with that email and ID combination.");
       }
 
+      const preRegData = querySnapshot.docs[0].data();
+      const staffName =
+        preRegData.displayName ||
+        preRegData.fullName ||
+        preRegData.name ||
+        [preRegData.firstName, preRegData.lastName].filter(Boolean).join(' ').trim() ||
+        '';
+
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+
+      if (staffName) {
+        try {
+          await updateProfile(userCredential.user, { displayName: staffName });
+        } catch {
+          // Non-blocking
+        }
+      }
       
       await setDoc(doc(db, "users", userCredential.user.uid), {
         uid: userCredential.user.uid,
         email: email.toLowerCase(),
+        ...(staffName ? { fullName: staffName, displayName: staffName } : {}),
         employeeId,
         role: 'staff',
         createdAt: serverTimestamp(),
