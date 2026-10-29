@@ -10,7 +10,7 @@ import {
   getDocs,
   onSnapshot,
 } from 'firebase/firestore';
-import { db } from './firebase';
+import { db } from './firebase.ts';
 
 export interface StoredAppointment {
   id: string;
