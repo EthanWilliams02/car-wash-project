@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
-import Footer from '../../../components/auth/landing/Footer';
+
 
 export default function CustomerContactUs() {
   const [formData, setFormData] = useState({
@@ -366,10 +366,7 @@ export default function CustomerContactUs() {
 
       </div>
 
-      {/* Footer wrapped with negative margins to break out of Dashboard padding layout */}
-      <div className="-mx-5 -mb-5 mt-auto">
-        <Footer hideAccount={true} />
-      </div>
+
     </div>
   );
 }
