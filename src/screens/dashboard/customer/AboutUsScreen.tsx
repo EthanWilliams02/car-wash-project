@@ -28,13 +28,13 @@ export default function AboutUsScreen() {
 
         <div className="relative z-10 max-w-4xl mx-auto px-6 text-center">
           <span className="inline-block uppercase tracking-[0.2em] text-[#E86A33] text-sm font-bold mb-6">
-            LuxeWash Identity
+            WashWizzy Identity
           </span>
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-white mb-6 leading-tight tracking-tight">
             Automotive Excellence,<br />Redefined.
           </h1>
           <p className="text-base md:text-lg text-[#A1A1AA] max-w-3xl mx-auto leading-relaxed">
-            We are architects of automotive perfection. LuxeWash merges advanced protective technologies with meticulous craftsmanship to elevate and preserve the world's finest vehicles.
+            We are architects of automotive perfection. WashWizzy merges advanced protective technologies with meticulous craftsmanship to elevate and preserve the world's finest vehicles.
           </p>
         </div>
 
@@ -58,7 +58,7 @@ export default function AboutUsScreen() {
 
               <div className="space-y-6 text-[#A1A1AA] leading-relaxed text-[15px] md:text-base">
                 <p>
-                  Born from an obsessive passion for mechanical art, LuxeWash was established to bridge the gap between standard car care and true automotive preservation. What began as a private detailing studio for discerning collectors has evolved into a premium destination for vehicle refinement.
+                  Born from an obsessive passion for mechanical art, WashWizzy was established to bridge the gap between standard car care and true automotive preservation. What began as a private detailing studio for discerning collectors has evolved into a premium destination for vehicle refinement.
                 </p>
                 <p>
                   We don't just maintain cars; we restore their narrative. Every curve polished and every surface protected is a testament to our commitment to uncompromising quality. We utilize only the most advanced compounds, ceramics, and techniques available globally.
@@ -101,10 +101,10 @@ export default function AboutUsScreen() {
         </div>
       </section>
 
-      {/* 3. The LuxeWash Process */}
+      {/* 3. The WashWizzy Process */}
       <section className="py-20 bg-[#141414] border-y border-[#2C2C2C] rounded-2xl">
         <div className="max-w-7xl mx-auto px-6 md:px-12 text-center">
-          <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">The LuxeWash Process</h2>
+          <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">The WashWizzy Process</h2>
           <p className="text-[#A1A1AA] mb-16 max-w-2xl mx-auto">
             A systematic approach to aesthetic perfection.
           </p>
@@ -184,11 +184,11 @@ export default function AboutUsScreen() {
         </div>
       </section>
 
-      {/* 5. Why Choose LuxeWash */}
+      {/* 5. Why Choose WashWizzy */}
       <section className="py-20 bg-[#141414] border-t border-[#2C2C2C] rounded-2xl">
         <div className="max-w-7xl mx-auto px-6 md:px-12">
           <h2 className="text-3xl md:text-4xl font-bold text-white mb-16 text-center">
-            Why LuxeWash?
+            Why WashWizzy?
           </h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

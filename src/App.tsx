@@ -42,6 +42,7 @@ import AdminCancelAppointment from './screens/dashboard/admin/AdminCancelAppoint
 import AdminRescheduleAppointment from './screens/dashboard/admin/AdminRescheduleAppointment';
 import AdminBusinessAnalytics from './screens/dashboard/admin/AdminBusinessAnalytics';
 import AdminReviews from './screens/dashboard/admin/AdminReviews';
+import AdminNotifications from './screens/dashboard/admin/AdminNotifications';
 import { AuthProvider } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { ThemeProvider } from './contexts/ThemeContext';
@@ -101,8 +102,13 @@ export default function App() {
               <Route path="reviews" element={<StaffReviews />} />
               <Route path="profile" element={<StaffProfile />} />
             </Route>
-            <Route path="/dashboard/admin" element={<AdminDashboardLayout />}>
+            <Route path="/dashboard/admin" element={
+              <NotificationsProvider>
+                <AdminDashboardLayout />
+              </NotificationsProvider>
+            }>
               <Route index element={<AdminDashboard />} />
+              <Route path="notifications" element={<AdminNotifications />} />
               <Route path="service-management" element={<AdminServiceManagement />} />
               <Route path="appointments" element={<AdminAppointments />} />
               <Route path="appointments/cancel/:customerUid/:appointmentId" element={<AdminCancelAppointment />} />

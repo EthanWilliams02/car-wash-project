@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Outlet, Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -10,23 +10,170 @@ import {
   Menu,
   ShieldCheck,
   X,
+  Bell,
+  CalendarCheck,
+  Clock,
+  Crown,
+  Gift,
+  CheckCircle2,
 } from "lucide-react";
 import { signOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "../../../lib/firebase";
 import { useAuth } from "../../../contexts/AuthContext";
 import { useTheme } from "../../../contexts/ThemeContext";
+import { useNotifications, type AppNotification } from "../../../contexts/NotificationsContext";
+import { useAdminNotificationSync } from "../../../hooks/useAdminNotificationSync";
 import ThemeToggle from "../../../components/ui/ThemeToggle";
 import LogoutConfirmationModal from "../../../components/ui/LogoutConfirmationModal";
+
+// ─── Dropdown Icon Renderer ───────────────────────────────────────────────────
+
+function NotifPreviewIcon({
+  type,
+  color,
+  bg,
+}: {
+  type: AppNotification["icon"];
+  color: string;
+  bg: string;
+}) {
+  const Icon =
+    type === "calendar" ? CalendarCheck :
+    type === "clock" ? Clock :
+    type === "star" ? Star :
+    type === "crown" ? Crown :
+    type === "gift" ? Gift :
+    CheckCircle2;
+
+  return (
+    <div className={`w-8 h-8 rounded-lg ${bg} flex items-center justify-center shrink-0`}>
+      <Icon className={`w-4 h-4 ${color}`} />
+    </div>
+  );
+}
+
+// ─── Notification Bell Dropdown (Screenshot 2 Match) ──────────────────────────
+
+function AdminBellDropdown({
+  onViewAll,
+  onClose,
+}: {
+  onViewAll: () => void;
+  onClose: () => void;
+}) {
+  const navigate = useNavigate();
+  const { notifications, unreadCount, markRead, markAllRead } = useNotifications();
+
+  // Show up to 5: unread first, then read
+  const preview = [
+    ...notifications.filter((n) => !n.isRead),
+    ...notifications.filter((n) => n.isRead),
+  ].slice(0, 5);
+
+  const handleClickItem = (notif: AppNotification) => {
+    if (!notif.isRead) markRead([notif.id]);
+    onClose();
+    if (notif.link) {
+      navigate(notif.link);
+    } else {
+      navigate("/dashboard/admin/notifications");
+    }
+  };
+
+  return (
+    <div className="absolute right-0 top-[calc(100%+10px)] w-[340px] sm:w-[360px] bg-[#171717] border border-[#2C2C2C] rounded-2xl shadow-[0_8px_40px_rgba(0,0,0,0.6)] z-50 overflow-hidden text-left animate-in fade-in slide-in-from-top-2 duration-150">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-[#2C2C2C]">
+        <div className="flex items-center gap-2">
+          <span className="text-[13px] font-semibold text-white">Notifications</span>
+          {unreadCount > 0 && (
+            <span className="px-1.5 py-0.5 rounded-full bg-[#E86A33] text-white text-[10px] font-bold">
+              {unreadCount}
+            </span>
+          )}
+        </div>
+        {unreadCount > 0 && (
+          <button
+            onClick={() => markAllRead()}
+            className="text-[11px] text-[#E86A33] font-medium hover:text-[#FF8055] transition-colors cursor-pointer"
+          >
+            Mark all read
+          </button>
+        )}
+      </div>
+
+      {/* List */}
+      <div className="max-h-[340px] overflow-y-auto divide-y divide-[#232323]">
+        {preview.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 px-6 text-center">
+            <div className="w-10 h-10 rounded-full bg-[#222] border border-[#2C2C2C] flex items-center justify-center mb-2.5">
+              <Bell className="w-4 h-4 text-[#71717A]" />
+            </div>
+            <p className="text-[13px] font-semibold text-[#F5F5F5] mb-1">No notifications yet</p>
+            <p className="text-[11px] text-[#71717A] leading-relaxed">
+              You're all caught up. Notifications about new bookings, cancellations, payments, and system activity will appear here.
+            </p>
+          </div>
+        ) : (
+          preview.map((notif) => (
+            <button
+              key={notif.id}
+              onClick={() => handleClickItem(notif)}
+              className={`w-full flex items-start gap-3 px-4 py-3 hover:bg-white/[0.04] transition-colors text-left relative cursor-pointer ${
+                !notif.isRead ? "bg-[#1E1E1E]" : ""
+              }`}
+            >
+              {!notif.isRead && (
+                <div className="absolute left-0 top-2 bottom-2 w-[2.5px] bg-[#E86A33] rounded-full" />
+              )}
+              <NotifPreviewIcon type={notif.icon} color={notif.iconColor} bg={notif.iconBg} />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <span
+                    className={`text-[12px] font-semibold truncate ${
+                      notif.isRead ? "text-[#E5E5E5]" : "text-white"
+                    }`}
+                  >
+                    {notif.title}
+                  </span>
+                  {!notif.isRead && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#E86A33] shrink-0" />
+                  )}
+                </div>
+                <p className="text-[11px] text-[#71717A] leading-relaxed line-clamp-2">
+                  {notif.message}
+                </p>
+                <p className="text-[10px] text-[#52525B] mt-1">{notif.time}</p>
+              </div>
+            </button>
+          ))
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="px-4 py-2.5 border-t border-[#2C2C2C] bg-[#141414]">
+        <button
+          onClick={onViewAll}
+          className="w-full text-center text-[12px] font-semibold text-[#E86A33] hover:text-[#FF8055] transition-colors py-1 cursor-pointer"
+        >
+          View all notifications →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function AdminDashboardLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { currentUser } = useAuth();
   const { theme } = useTheme();
+  const { unreadCount } = useNotifications();
 
   // Role gate: only users whose profile has role "admin" may see this area.
-  // This is a UI-level check; Firestore rules are what actually protect data.
   const [isAdmin, setIsAdmin] = useState(false);
   const [redirectTo, setRedirectTo] = useState<string | null>(null);
 
@@ -55,12 +202,39 @@ export default function AdminDashboardLayout() {
     };
   }, [uid]);
 
+  // Real-time synchronization of admin events into notifications
+  useAdminNotificationSync(isAdmin);
+
   // Mobile sidebar state
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Close mobile sidebar on route change
   useEffect(() => {
     setMobileMenuOpen(false);
+  }, [location.pathname]);
+
+  // Bell dropdown state
+  const [bellOpen, setBellOpen] = useState(false);
+  const bellRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (bellRef.current && !bellRef.current.contains(event.target as Node)) {
+        setBellOpen(false);
+      }
+    }
+    if (bellOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [bellOpen]);
+
+  // Close dropdown on route change
+  useEffect(() => {
+    setBellOpen(false);
   }, [location.pathname]);
 
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
@@ -113,8 +287,12 @@ export default function AdminDashboardLayout() {
       path: "/dashboard/admin/reviews",
       icon: <Star className="w-4 h-4" />,
     },
+    {
+      name: "Notifications",
+      path: "/dashboard/admin/notifications",
+      icon: <Bell className="w-4 h-4" />,
+    },
   ];
-
 
   return (
     <div className={theme}>
@@ -153,7 +331,7 @@ export default function AdminDashboardLayout() {
             </Link>
             <button
               onClick={() => setMobileMenuOpen(false)}
-              className="p-1 rounded-lg text-[#A1A1AA] hover:text-[#F5F5F5] lg:hidden"
+              className="p-1 rounded-lg text-[#A1A1AA] hover:text-[#F5F5F5] lg:hidden cursor-pointer"
               aria-label="Close Menu"
             >
               <X className="w-5 h-5" />
@@ -181,7 +359,12 @@ export default function AdminDashboardLayout() {
                   <div className="[&>svg]:w-[18px] [&>svg]:h-[18px]">
                     {item.icon}
                   </div>
-                  {item.name}
+                  <span className="flex-1">{item.name}</span>
+                  {item.name === "Notifications" && unreadCount > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-full bg-[#E86A33] text-white text-[10px] font-bold">
+                      {unreadCount}
+                    </span>
+                  )}
                 </Link>
               );
             })}
@@ -224,7 +407,7 @@ export default function AdminDashboardLayout() {
               {/* Mobile hamburger button */}
               <button
                 onClick={() => setMobileMenuOpen(true)}
-                className="p-2 -ml-2 rounded-lg text-[#A1A1AA] hover:text-[#F5F5F5] hover:bg-white/[0.04] lg:hidden"
+                className="p-2 -ml-2 rounded-lg text-[#A1A1AA] hover:text-[#F5F5F5] hover:bg-white/[0.04] lg:hidden cursor-pointer"
                 aria-label="Open Menu"
               >
                 <Menu className="w-5 h-5" />
@@ -243,6 +426,34 @@ export default function AdminDashboardLayout() {
             <div className="flex items-center gap-3 sm:gap-4">
               {/* Global Theme Toggle */}
               <ThemeToggle size={18} />
+
+              <div className="h-5 w-px bg-[#2C2C2C]" />
+
+              {/* Notification Bell Dropdown */}
+              <div ref={bellRef} className="relative flex items-center justify-center">
+                <button
+                  onClick={() => setBellOpen((o) => !o)}
+                  className="p-2 rounded-xl text-[#71717A] hover:text-[#F5F5F5] hover:bg-white/[0.06] transition-all duration-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#E86A33]/50 active:scale-95 relative flex items-center justify-center"
+                  aria-label="Notifications"
+                  title="Admin Notifications"
+                >
+                  <div className="relative w-5 h-5 flex items-center justify-center">
+                    <Bell className="w-[18px] h-[18px]" />
+                    {unreadCount > 0 && (
+                      <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-[#E86A33] rounded-full ring-2 ring-[#101010]" />
+                    )}
+                  </div>
+                </button>
+                {bellOpen && (
+                  <AdminBellDropdown
+                    onClose={() => setBellOpen(false)}
+                    onViewAll={() => {
+                      setBellOpen(false);
+                      navigate("/dashboard/admin/notifications");
+                    }}
+                  />
+                )}
+              </div>
             </div>
           </header>
 
